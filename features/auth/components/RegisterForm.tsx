@@ -47,6 +47,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   const [showRoles, setShowRoles] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const skipsProgramAndFicha = ['Instructor', 'Pasante'].includes(form.rol);
 
   const animateFocus = (field: keyof typeof animations, toValue: number) => {
     RNAnimated.timing(animations[field], {
@@ -71,6 +72,17 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const handleRoleSelect = (rol: string) => {
+    update('rol', rol);
+
+    if (['Instructor', 'Pasante'].includes(rol)) {
+      update('programa', '');
+      update('ficha', '');
+    }
+
+    setShowRoles(false);
+  };
+
   const pickProfilePhoto = async () => {
     setUploadingPhoto(true);
 
@@ -81,7 +93,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         showAlert({
           variant: 'warning',
           title: 'Permiso requerido',
-          message: 'Necesitamos permiso para abrir tu galeria y elegir una foto.',
+          message: 'Necesitamos permiso para abrir tu galería y elegir una foto.',
         });
         return;
       }
@@ -107,12 +119,12 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       showAlert({
         variant: 'info',
         title: 'Foto seleccionada',
-        message: 'Tu foto de perfil quedo lista para guardarse con el registro.',
+        message: 'Tu foto de perfil quedó lista para guardarse con el registro.',
       });
     } catch (error) {
       showAlert({
         variant: 'error',
-        title: 'No pudimos abrir la galeria',
+        title: 'No pudimos abrir la galería',
         message: 'Intenta nuevamente para seleccionar tu foto.',
       });
     } finally {
@@ -121,15 +133,17 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   };
 
   const handleRegister = async () => {
-    const requiredValues = [
-      form.nombre,
-      form.identificacion,
-      form.programa,
-      form.ficha,
-      form.correo,
-      form.contrasena,
-      form.rol,
-    ];
+    const requiredValues = skipsProgramAndFicha
+      ? [form.nombre, form.identificacion, form.correo, form.contrasena, form.rol]
+      : [
+          form.nombre,
+          form.identificacion,
+          form.programa,
+          form.ficha,
+          form.correo,
+          form.contrasena,
+          form.rol,
+        ];
 
     if (requiredValues.some((value) => !value.trim())) {
       showAlert({
@@ -143,8 +157,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     if (!validateEmail(form.correo.trim().toLowerCase())) {
       showAlert({
         variant: 'warning',
-        title: 'Correo invalido',
-        message: 'Escribe un correo con formato valido para continuar.',
+        title: 'Correo inválido',
+        message: 'Escribe un correo con formato válido para continuar.',
       });
       return;
     }
@@ -154,7 +168,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     if (!passwordValidation.isValid) {
       showAlert({
         variant: 'warning',
-        title: 'Contrasena insegura',
+        title: 'Contraseña insegura',
         message: passwordValidation.message,
       });
       return;
@@ -172,7 +186,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         variant: 'success',
         title: 'Registro exitoso',
         message:
-          'Te enviamos un enlace de verificacion a tu correo. Abre ese enlace y luego inicia sesion en Biomind.',
+          'Te enviamos un enlace de verificación a tu correo. Abre ese enlace y luego inicia sesión en Biomind.',
       });
 
       onRegistered(registeredUser.correo);
@@ -190,7 +204,53 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         <Text style={registerStyles.backText}>Volver</Text>
       </Pressable>
 
-      <Text style={registerStyles.title}>REGISTRATE</Text>
+      <Text style={registerStyles.title}>REGÍSTRATE</Text>
+
+      <Text style={registerStyles.label}>Rol</Text>
+      <TouchableOpacity onPress={() => setShowRoles(!showRoles)} activeOpacity={0.7}>
+        <RNAnimated.View
+          style={[
+            registerStyles.inputWrapper,
+            {
+              borderBottomWidth: animations.rol.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
+            },
+          ]}>
+          <Ionicons
+            name="people-outline"
+            size={18}
+            color={showRoles || form.rol ? '#2FC4B1' : '#B6B6B6'}
+            style={registerStyles.inputIcon}
+          />
+          <Text style={[registerStyles.input, !form.rol && { color: '#B0C4BB' }]}>
+            {form.rol || 'Selecciona tu rol'}
+          </Text>
+          <Ionicons
+            name={showRoles ? 'chevron-up-outline' : 'chevron-down-outline'}
+            size={16}
+            color={showRoles ? '#2FC4B1' : '#9AA8A0'}
+          />
+        </RNAnimated.View>
+      </TouchableOpacity>
+
+      {showRoles && (
+        <View style={registerStyles.dropdown}>
+          {ROLES.map((rol) => (
+            <TouchableOpacity
+              key={rol}
+              style={registerStyles.dropdownItem}
+              onPress={() => handleRoleSelect(rol)}>
+              <Text
+                style={[
+                  registerStyles.dropdownText,
+                  form.rol === rol && registerStyles.dropdownTextActive,
+                ]}>
+                {rol}
+              </Text>
+              {form.rol === rol && <Ionicons name="checkmark" size={16} color="#2FC4B1" />}
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
       <TouchableOpacity style={registerStyles.photoButton} onPress={pickProfilePhoto} activeOpacity={0.85}>
         {form.fotoPerfilUri ? (
@@ -202,7 +262,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
             ) : (
               <Ionicons name="camera-outline" size={22} color="#2FC4B1" />
             )}
-            <Text style={registerStyles.photoText}>Tu Foto</Text>
+            <Text style={registerStyles.photoText}>Tu foto</Text>
           </View>
         )}
       </TouchableOpacity>
@@ -273,7 +333,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
             ],
           },
         ]}>
-        Identificacion
+        Identificación
       </RNAnimated.Text>
       <RNAnimated.View
         style={[
@@ -302,7 +362,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         </AnimatedText>
         <TextInput
           style={registerStyles.input}
-          placeholder="Numero de identificacion"
+          placeholder="Número de identificación"
           placeholderTextColor="#88888859"
           keyboardType="numeric"
           value={form.identificacion}
@@ -328,6 +388,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       <RNAnimated.View
         style={[
           registerStyles.inputWrapper,
+          skipsProgramAndFicha && { opacity: 0.55 },
           {
             borderBottomWidth: animations.programa.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
           },
@@ -346,7 +407,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         </AnimatedText>
         <TextInput
           style={registerStyles.input}
-          placeholder="Nombre del programa"
+          editable={!skipsProgramAndFicha}
+          placeholder={skipsProgramAndFicha ? `No aplica para ${form.rol.toLowerCase()}` : 'Nombre del programa'}
           placeholderTextColor="#88888859"
           value={form.programa}
           onChangeText={(value) => update('programa', value)}
@@ -366,11 +428,12 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
             ],
           },
         ]}>
-        Numero de ficha
+        Número de ficha
       </RNAnimated.Text>
       <RNAnimated.View
         style={[
           registerStyles.inputWrapper,
+          skipsProgramAndFicha && { opacity: 0.55 },
           {
             borderBottomWidth: animations.ficha.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
           },
@@ -380,7 +443,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         </AnimatedText>
         <TextInput
           style={registerStyles.input}
-          placeholder="Numero de ficha"
+          editable={!skipsProgramAndFicha}
+          placeholder={skipsProgramAndFicha ? `No aplica para ${form.rol.toLowerCase()}` : 'Número de ficha'}
           placeholderTextColor="#88888859"
           keyboardType="numeric"
           value={form.ficha}
@@ -401,7 +465,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
             ],
           },
         ]}>
-        Correo Electronico
+        Correo electrónico
       </RNAnimated.Text>
       <RNAnimated.View
         style={[
@@ -446,7 +510,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
             ],
           },
         ]}>
-        Contrasena
+        Contraseña
       </RNAnimated.Text>
       <RNAnimated.View
         style={[
@@ -472,7 +536,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         </AnimatedText>
         <TextInput
           style={[registerStyles.input, { flex: 1 }]}
-          placeholder="Contrasena"
+          placeholder="Contraseña"
           placeholderTextColor="#88888859"
           secureTextEntry={!showPass}
           value={form.contrasena}
@@ -486,57 +550,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       </RNAnimated.View>
 
       <Text style={registerStyles.passwordHint}>
-        Usa minimo 8 caracteres, una mayuscula, una minuscula y un numero.
+        Usa mínimo 8 caracteres, una mayúscula, una minúscula y un número.
       </Text>
-
-      <Text style={registerStyles.label}>Rol</Text>
-      <TouchableOpacity onPress={() => setShowRoles(!showRoles)} activeOpacity={0.7}>
-        <RNAnimated.View
-          style={[
-            registerStyles.inputWrapper,
-            {
-              borderBottomWidth: animations.rol.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
-            },
-          ]}>
-          <Ionicons
-            name="people-outline"
-            size={18}
-            color={showRoles || form.rol ? '#2FC4B1' : '#B6B6B6'}
-            style={registerStyles.inputIcon}
-          />
-          <Text style={[registerStyles.input, !form.rol && { color: '#B0C4BB' }]}>
-            {form.rol || 'Selecciona tu rol'}
-          </Text>
-          <Ionicons
-            name={showRoles ? 'chevron-up-outline' : 'chevron-down-outline'}
-            size={16}
-            color={showRoles ? '#2FC4B1' : '#9AA8A0'}
-          />
-        </RNAnimated.View>
-      </TouchableOpacity>
-
-      {showRoles && (
-        <View style={registerStyles.dropdown}>
-          {ROLES.map((rol) => (
-            <TouchableOpacity
-              key={rol}
-              style={registerStyles.dropdownItem}
-              onPress={() => {
-                update('rol', rol);
-                setShowRoles(false);
-              }}>
-              <Text
-                style={[
-                  registerStyles.dropdownText,
-                  form.rol === rol && registerStyles.dropdownTextActive,
-                ]}>
-                {rol}
-              </Text>
-              {form.rol === rol && <Ionicons name="checkmark" size={16} color="#2FC4B1" />}
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
 
       <TouchableOpacity style={registerStyles.button} onPress={handleRegister} activeOpacity={0.85}>
         {loading ? (
@@ -550,8 +565,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       </TouchableOpacity>
 
       <TouchableOpacity style={registerStyles.linkContainer} onPress={onGoLogin}>
-        <Text style={registerStyles.linkText}>Ya tienes cuenta? </Text>
-        <Text style={[registerStyles.linkText, registerStyles.linkBold]}>Inicia sesion</Text>
+        <Text style={registerStyles.linkText}>¿Ya tienes cuenta? </Text>
+        <Text style={[registerStyles.linkText, registerStyles.linkBold]}>Inicia sesión</Text>
       </TouchableOpacity>
     </ScrollView>
   );

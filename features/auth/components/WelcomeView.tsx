@@ -30,8 +30,8 @@ export function WelcomeView({
         </RNAnimated.Text>
       </View>
       <Text style={[authScreenStyles.saludo, { fontSize: 16, marginTop: 9 }]}>
-        Un espacio hecho para ti,{'\n'}donde podras aprender,{'\n'}
-        registrar tus practicas y crecer{'\n'}en la biotecnologia vegetal.
+        Un espacio hecho para ti,{'\n'}donde podrás aprender,{'\n'}
+        registrar tus prácticas y crecer{'\n'}en la biotecnología vegetal.
       </Text>
       <Text style={[authScreenStyles.saludodos, { fontSize: 16, marginTop: 9 }]}>
         Disfruta tu proceso y avanza{'\n'}a tu ritmo.
@@ -40,7 +40,7 @@ export function WelcomeView({
       <TouchableOpacity onPress={onGoLogin} style={authScreenStyles.buttonLogin}>
         <View style={authScreenStyles.buttonContent}>
           <MaterialIcons name="login" size={20} color="#FFF" />
-          <Text style={authScreenStyles.buttonTextLogin}>Iniciar Sesion</Text>
+          <Text style={authScreenStyles.buttonTextLogin}>Iniciar sesión</Text>
         </View>
       </TouchableOpacity>
 

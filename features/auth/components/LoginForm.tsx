@@ -72,7 +72,7 @@ export function LoginForm({
       showAlert({
         variant: 'warning',
         title: 'Faltan datos',
-        message: 'Completa correo y contrasena para iniciar sesion.',
+        message: 'Completa correo y contraseña para iniciar sesión.',
       });
       return;
     }
@@ -80,8 +80,8 @@ export function LoginForm({
     if (!validateEmail(correo)) {
       showAlert({
         variant: 'warning',
-        title: 'Correo invalido',
-        message: 'Escribe un correo con formato valido.',
+        title: 'Correo inválido',
+        message: 'Escribe un correo con formato válido.',
       });
       return;
     }
@@ -93,7 +93,7 @@ export function LoginForm({
       showAlert({
         variant: 'success',
         title: 'Bienvenido',
-        message: 'Tu inicio de sesion fue exitoso.',
+        message: 'Tu inicio de sesión fue exitoso.',
       });
       onAuthenticated();
     } catch (error: any) {
@@ -119,7 +119,7 @@ export function LoginForm({
       showAlert({
         variant: 'warning',
         title: 'Escribe tu correo',
-        message: 'Ingresa primero tu correo para enviarte el enlace de recuperacion.',
+        message: 'Ingresa primero tu correo para enviarte el enlace de recuperación.',
       });
       return;
     }
@@ -127,8 +127,8 @@ export function LoginForm({
     if (!validateEmail(correo)) {
       showAlert({
         variant: 'warning',
-        title: 'Correo invalido',
-        message: 'Escribe un correo valido para recuperar tu contrasena.',
+        title: 'Correo inválido',
+        message: 'Escribe un correo válido para recuperar tu contraseña.',
       });
       return;
     }
@@ -137,11 +137,12 @@ export function LoginForm({
 
     try {
       await enviarRecuperacionContrasena(correo);
+      setForm((prev) => ({ ...prev, contrasena: '' }));
       showAlert({
         variant: 'info',
         title: 'Revisa tu correo',
         message:
-          'Te enviamos un enlace para restablecer tu contrasena. Cuando la cambies, vuelve a iniciar sesion.',
+          'Te enviamos un enlace para restablecer tu contraseña. Guarda la nueva clave desde ese enlace y luego vuelve a iniciar sesión.',
       });
     } catch (error) {
       showAlert(mapAuthErrorToAlert(error));
@@ -157,7 +158,7 @@ export function LoginForm({
         <Text style={loginStyles.backText}>Volver</Text>
       </Pressable>
 
-      <Text style={loginStyles.title}>INICIA SESION</Text>
+      <Text style={loginStyles.title}>INICIA SESIÓN</Text>
 
       <RNAnimated.Text
         style={[
@@ -170,7 +171,7 @@ export function LoginForm({
             ],
           },
         ]}>
-        Correo Electronico
+        Correo electrónico
       </RNAnimated.Text>
       <RNAnimated.View
         style={[
@@ -216,7 +217,7 @@ export function LoginForm({
             ],
           },
         ]}>
-        Contrasena
+        Contraseña
       </RNAnimated.Text>
       <RNAnimated.View
         style={[
@@ -242,7 +243,7 @@ export function LoginForm({
         </AnimatedText>
         <TextInput
           style={[loginStyles.input, { flex: 1 }]}
-          placeholder="Contrasena"
+          placeholder="Contraseña"
           placeholderTextColor="#88888859"
           secureTextEntry={!showPass}
           value={form.contrasena}
@@ -266,7 +267,7 @@ export function LoginForm({
           ) : (
             <>
               <Ionicons name="refresh-circle-outline" size={18} color="#117C72" />
-              <Text style={loginStyles.secondaryPillText}>Recuperar contrasena</Text>
+              <Text style={loginStyles.secondaryPillText}>Recuperar contraseña</Text>
             </>
           )}
         </TouchableOpacity>
@@ -282,14 +283,14 @@ export function LoginForm({
         ) : (
           <>
             <Ionicons name="log-in-outline" size={20} color="white" />
-            <Text style={loginStyles.buttonText}>Iniciar Sesion</Text>
+            <Text style={loginStyles.buttonText}>Iniciar sesión</Text>
           </>
         )}
       </TouchableOpacity>
 
       <TouchableOpacity style={loginStyles.linkContainer} onPress={onGoRegister}>
-        <Text style={loginStyles.linkText}>No tienes cuenta? </Text>
-        <Text style={[loginStyles.linkText, loginStyles.linkBold]}>Registrate</Text>
+        <Text style={loginStyles.linkText}>¿No tienes cuenta? </Text>
+        <Text style={[loginStyles.linkText, loginStyles.linkBold]}>Regístrate</Text>
       </TouchableOpacity>
     </ScrollView>
   );

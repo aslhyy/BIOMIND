@@ -1,0 +1,18 @@
+export const pasantePalette = {
+  background: '#F4F7F5',
+  surface: '#FFFFFF',
+  surfaceMuted: '#F0FBF7',
+  text: '#405A50',
+  textMuted: '#7F9B91',
+  border: '#D4EFE6',
+  shadow: '#B8DCD0',
+  primary: '#158A77',
+  secondary: '#45C9B0',
+  aqua: '#BFF5EC',
+  aquaSoft: '#E8FAF5',
+  green: '#73C088',
+  softGreen: '#EEF8E9',
+  dark: '#153F35',
+  coral: '#FFE1D6',
+  coralText: '#8B7467',
+};

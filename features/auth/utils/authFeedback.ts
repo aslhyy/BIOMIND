@@ -11,7 +11,7 @@ export function validatePassword(password: string) {
   return {
     isValid,
     message:
-      'La contrasena debe tener minimo 8 caracteres, una mayuscula, una minuscula y un numero.',
+      'La contraseña debe tener mínimo 8 caracteres, una mayúscula, una minúscula y un número.',
   };
 }
 
@@ -29,11 +29,18 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
         title: 'Correo ya registrado',
         message: 'Ese correo ya tiene una cuenta en Biomind.',
       };
+    case 'auth/orphan-auth-account':
+      return {
+        variant: 'warning',
+        title: 'Correo aún en Auth',
+        message:
+          'Ese correo fue borrado de Firestore, pero sigue existiendo en Firebase Auth. Usa la contraseña anterior o elimina también la cuenta desde Authentication.',
+      };
     case 'auth/invalid-email':
       return {
         variant: 'warning',
-        title: 'Correo invalido',
-        message: 'Escribe un correo con formato valido para continuar.',
+        title: 'Correo inválido',
+        message: 'Escribe un correo con formato válido para continuar.',
       };
     case 'auth/missing-email':
       return {
@@ -44,15 +51,15 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
     case 'auth/weak-password':
       return {
         variant: 'warning',
-        title: 'Contrasena insegura',
+        title: 'Contraseña insegura',
         message:
-          'La contrasena debe tener minimo 8 caracteres, una mayuscula, una minuscula y un numero.',
+          'La contraseña debe tener mínimo 8 caracteres, una mayúscula, una minúscula y un número.',
       };
     case 'auth/invalid-credential':
       return {
         variant: 'error',
         title: 'Credenciales incorrectas',
-        message: 'El correo o la contrasena no coinciden.',
+        message: 'El correo o la contraseña no coinciden.',
       };
     case 'auth/user-not-found':
       return {
@@ -64,25 +71,25 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
       return {
         variant: 'error',
         title: 'Perfil no encontrado',
-        message: 'No encontramos la informacion del usuario en la base de datos.',
+        message: 'No encontramos la información del usuario en la base de datos.',
       };
     case 'auth/email-not-verified':
       return {
         variant: 'info',
         title: 'Verifica tu correo',
         message:
-          'Tu cuenta aun no ha sido verificada. Revisa el enlace que te enviamos y luego intenta iniciar sesion otra vez.',
+          'Tu cuenta aún no ha sido verificada. Revisa el enlace que te enviamos y luego intenta iniciar sesión otra vez.',
       };
     case 'auth/already-verified':
       return {
         variant: 'info',
         title: 'Cuenta verificada',
-        message: 'Tu correo ya fue verificado. Ahora puedes iniciar sesion.',
+        message: 'Tu correo ya fue verificado. Ahora puedes iniciar sesión.',
       };
     case 'auth/network-request-failed':
       return {
         variant: 'error',
-        title: 'Sin conexion',
+        title: 'Sin conexión',
         message: 'Revisa tu internet e intenta nuevamente.',
       };
     case 'auth/too-many-requests':
@@ -97,20 +104,20 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
         variant: 'error',
         title: 'Permisos insuficientes',
         message:
-          'Firebase esta bloqueando esta accion. Debes ajustar las reglas de Firestore para permitir crear y leer los documentos de la coleccion `usuarios`.',
+          'Firebase está bloqueando esta acción. Debes ajustar las reglas de Firestore para permitir crear y leer los documentos de la colección `usuarios`.',
       };
     case 'auth/operation-not-allowed':
       return {
         variant: 'error',
-        title: 'Operacion no permitida',
+        title: 'Operación no permitida',
         message:
-          'Esta opcion no esta habilitada en Firebase. Revisa Authentication y las reglas de tu proyecto.',
+          'Esta opción no está habilitada en Firebase. Revisa Authentication y las reglas de tu proyecto.',
       };
     case 'storage/photo-too-large':
       return {
         variant: 'warning',
         title: 'Foto muy pesada',
-        message: 'La imagen elegida ocupa demasiado. Prueba con una foto mas liviana.',
+        message: 'La imagen elegida ocupa demasiado. Prueba con una foto más liviana.',
       };
     default:
       if (rawMessage.includes('missing or insufficient permissions')) {
@@ -118,14 +125,14 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
           variant: 'error',
           title: 'Permisos insuficientes',
           message:
-            'Firebase no tiene permisos para completar esta accion. Lo mas probable es que falten reglas en Firestore para la coleccion `usuarios`.',
+            'Firebase no tiene permisos para completar esta acción. Lo más probable es que falten reglas en Firestore para la colección `usuarios`.',
         };
       }
 
       return {
         variant: 'error',
-        title: 'Algo salio mal',
-        message: error?.message || 'No pudimos completar la accion. Intenta nuevamente.',
+        title: 'Algo salió mal',
+        message: error?.message || 'No pudimos completar la acción. Intenta nuevamente.',
       };
   }
 }
