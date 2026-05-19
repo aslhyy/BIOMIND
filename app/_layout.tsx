@@ -5,6 +5,7 @@
 
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 // A root layout in a React framework (like Next.js or Expo Router) is a required, 
@@ -12,14 +13,12 @@ import 'react-native-reanimated';
 
 export default function RootLayout() {
   return (
-    <>
+    <SafeAreaProvider>
       <Stack>
         <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="(auth)/login" options={{ headerShown: false }} />
-        <Stack.Screen name="(auth)/register" options={{ headerShown: false }} />
         <Stack.Screen name="dashboard/dashboard" options={{ headerShown: false }} />
       </Stack>
       <StatusBar style="auto" />
-    </>
+    </SafeAreaProvider>
   );
 }

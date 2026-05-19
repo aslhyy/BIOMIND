@@ -16,7 +16,7 @@ import { mapAuthErrorToAlert } from '../utils/authFeedback';
 const VERIFY_STEPS = [
   'Abre el correo que te enviamos desde Firebase Authentication.',
   'Pulsa el enlace para confirmar tu cuenta.',
-  'Vuelve a Biomind e inicia sesion con tu correo y contrasena.',
+  'Vuelve a Biomind e inicia sesión con tu correo y contraseña.',
 ];
 
 export function VerifyEmailForm({
@@ -41,7 +41,7 @@ export function VerifyEmailForm({
     showAlert({
       variant: 'info',
       title: 'Listo para entrar',
-      message: 'Si ya abriste el enlace, vuelve a iniciar sesion para continuar.',
+      message: 'Si ya abriste el enlace, vuelve a iniciar sesión para continuar.',
     });
     onReadyToLogin(pendingVerification.correo);
   };
@@ -50,9 +50,9 @@ export function VerifyEmailForm({
     if (!pendingVerification?.correo || !pendingVerification?.contrasena) {
       showAlert({
         variant: 'warning',
-        title: 'Vuelve a iniciar sesion',
+        title: 'Vuelve a iniciar sesión',
         message:
-          'Para reenviar el correo de verificacion necesitamos que ingreses otra vez con tu correo y contrasena.',
+          'Para reenviar el correo de verificación necesitamos que ingreses otra vez con tu correo y contraseña.',
       });
       onBack();
       return;
@@ -69,7 +69,7 @@ export function VerifyEmailForm({
         variant: 'success',
         title: 'Correo reenviado',
         message:
-          'Te enviamos un nuevo enlace de verificacion. Revisa tu bandeja principal y tambien spam.',
+          'Te enviamos un nuevo enlace de verificación. Revisa tu bandeja principal y también spam.',
       });
     } catch (error) {
       showAlert(mapAuthErrorToAlert(error));
@@ -87,8 +87,8 @@ export function VerifyEmailForm({
 
       <Text style={verifyStyles.title}>VERIFICA TU CORREO</Text>
       <Text style={verifyStyles.subtitle}>
-        Tu cuenta todavia no esta confirmada. Biomind ahora usa el correo de verificacion gratuito
-        de Firebase, asi que solo necesitas abrir el enlace que llego a tu correo.
+        Tu cuenta todavía no está confirmada. Biomind ahora usa el correo de verificación gratuito
+        de Firebase, así que solo necesitas abrir el enlace que llegó a tu correo.
       </Text>
 
       <View style={verifyStyles.emailPill}>
@@ -108,8 +108,8 @@ export function VerifyEmailForm({
       </View>
 
       <Text style={verifyStyles.helperText}>
-        Cuando ya lo hayas hecho, vuelve al inicio de sesion. Si no encuentras el correo, puedes
-        reenviarlo desde aqui.
+        Cuando ya lo hayas hecho, vuelve al inicio de sesión. Si no encuentras el correo, puedes
+        reenviarlo desde aquí.
       </Text>
 
       <TouchableOpacity
@@ -117,7 +117,7 @@ export function VerifyEmailForm({
         onPress={handleReturnToLogin}
         activeOpacity={0.85}>
         <Ionicons name="log-in-outline" size={20} color="white" />
-        <Text style={verifyStyles.primaryButtonText}>Volver al inicio de sesion</Text>
+        <Text style={verifyStyles.primaryButtonText}>Volver al inicio de sesión</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
