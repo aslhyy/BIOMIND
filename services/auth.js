@@ -9,9 +9,13 @@ import {
   updateProfile,
 } from 'firebase/auth';
 import {
+  collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  limit,
+  query,
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
@@ -48,10 +52,6 @@ function canUseAsAuthPhotoUrl(photoUrl) {
   return typeof photoUrl === 'string' && /^https?:\/\//i.test(photoUrl);
 }
 
-function roleSkipsProgramAndFicha(role) {
-  return ['instructor', 'pasante'].includes((role || '').trim().toLowerCase());
-}
-
 function buildUserProfile({
   uid,
   nombre,
@@ -80,6 +80,25 @@ function buildUserProfile({
   };
 }
 
+async function sincronizarCorreoVerificado(userRef, perfil, emailVerified) {
+  if (perfil.correoVerificado === emailVerified) {
+    return perfil;
+  }
+
+  const actualizadoEn = new Date();
+
+  await updateDoc(userRef, {
+    correoVerificado: emailVerified,
+    actualizadoEn,
+  });
+
+  return {
+    ...perfil,
+    correoVerificado: emailVerified,
+    actualizadoEn,
+  };
+}
+
 async function completarRegistroUsuario(user, profileData, fotoUrl) {
   await updateProfile(user, {
     displayName: profileData.nombre,
@@ -89,13 +108,23 @@ async function completarRegistroUsuario(user, profileData, fotoUrl) {
   await setDoc(doc(db, USUARIOS_COLLECTION, user.uid), profileData);
 }
 
+async function resolverRolInicial() {
+  try {
+    const firstUserQuery = query(collection(db, USUARIOS_COLLECTION), limit(1));
+    const snapshot = await getDocs(firstUserQuery);
+
+    return snapshot.empty ? 'Administrador' : null;
+  } catch {
+    return null;
+  }
+}
+
 async function restaurarPerfilAuthExistente(form, normalizedPrograma, normalizedFicha) {
   const {
     correo,
     contrasena,
     nombre,
     identificacion,
-    rol,
     fotoPerfilBase64,
     fotoPerfilMimeType,
   } = form;
@@ -120,13 +149,14 @@ async function restaurarPerfilAuthExistente(form, normalizedPrograma, normalized
     }
 
     const fotoUrl = await prepareProfilePhoto(fotoPerfilBase64, fotoPerfilMimeType);
+    const rolInicial = await resolverRolInicial();
     const profileData = buildUserProfile({
       uid: cred.user.uid,
       nombre,
       identificacion,
       programa: normalizedPrograma,
       ficha: normalizedFicha,
-      rol,
+      rol: rolInicial,
       correo,
       fotoUrl,
       correoVerificado: cred.user.emailVerified,
@@ -142,6 +172,7 @@ async function restaurarPerfilAuthExistente(form, normalizedPrograma, normalized
       correo,
       nombre,
       fotoUrl,
+      rol: rolInicial,
     };
   } finally {
     try {
@@ -158,16 +189,11 @@ export async function registrar(form) {
     contrasena,
     nombre,
     identificacion,
-    programa,
-    ficha,
-    rol,
     fotoPerfilBase64,
     fotoPerfilMimeType,
   } = form;
-  const normalizedRole = (rol || '').trim().toLowerCase();
-  const skipsProgramAndFicha = roleSkipsProgramAndFicha(normalizedRole);
-  const normalizedPrograma = skipsProgramAndFicha ? null : (programa || '').trim();
-  const normalizedFicha = skipsProgramAndFicha ? null : (ficha || '').trim();
+  const normalizedPrograma = null;
+  const normalizedFicha = null;
 
   let cred;
 
@@ -185,13 +211,14 @@ export async function registrar(form) {
 
   try {
     const fotoUrl = await prepareProfilePhoto(fotoPerfilBase64, fotoPerfilMimeType);
+    const rolInicial = await resolverRolInicial();
     const profileData = buildUserProfile({
       uid: cred.user.uid,
       nombre,
       identificacion,
       programa: normalizedPrograma,
       ficha: normalizedFicha,
-      rol,
+      rol: rolInicial,
       correo,
       fotoUrl,
     });
@@ -204,6 +231,7 @@ export async function registrar(form) {
       correo,
       nombre,
       fotoUrl,
+      rol: rolInicial,
     };
   } catch (error) {
     try {
@@ -240,37 +268,25 @@ export async function iniciarSesion(correo, contrasena) {
   const snapshot = await getDoc(userRef);
 
   if (!snapshot.exists()) {
-    const fallbackProfile = buildUserProfile({
-      uid: cred.user.uid,
-      nombre: cred.user.displayName || correo.split('@')[0] || 'Pasante Biomind',
-      identificacion: '',
-      programa: null,
-      ficha: null,
-      rol: 'Pasante',
-      correo,
-      fotoUrl: cred.user.photoURL || null,
-      correoVerificado: cred.user.emailVerified,
-    });
-
-    await setDoc(userRef, fallbackProfile);
-
-    return {
-      user: cred.user,
-      profile: fallbackProfile,
-    };
+    await signOut(auth);
+    throw createFlowError(
+      'auth/profile-not-found',
+      'Tu cuenta existe, pero aÃºn no tiene perfil en Biomind. Contacta al administrador.'
+    );
   }
 
-  const perfil = snapshot.data();
+  const perfil = await sincronizarCorreoVerificado(
+    userRef,
+    snapshot.data(),
+    cred.user.emailVerified
+  );
 
-  if (perfil.correoVerificado !== cred.user.emailVerified) {
-    try {
-      await updateDoc(userRef, {
-        correoVerificado: cred.user.emailVerified,
-        actualizadoEn: new Date(),
-      });
-    } catch {
-      // ignore profile sync failures so authenticated users can continue to the app
-    }
+  if (!String(perfil.rol || '').trim()) {
+    await signOut(auth);
+    throw createFlowError(
+      'auth/role-not-assigned',
+      'Tu cuenta estÃ¡ pendiente de asignaciÃ³n de rol por parte del administrador.'
+    );
   }
 
   return {
@@ -328,7 +344,6 @@ export async function actualizarPerfilUsuario(changes) {
     nombre,
     programa,
     ficha,
-    trimestreActual,
     fotoPerfilBase64,
     fotoPerfilMimeType,
   } = changes;
@@ -353,10 +368,6 @@ export async function actualizarPerfilUsuario(changes) {
 
   if (typeof ficha !== 'undefined') {
     profileUpdates.ficha = ficha ? ficha.trim() : null;
-  }
-
-  if (typeof trimestreActual !== 'undefined') {
-    profileUpdates.trimestreActual = trimestreActual ? trimestreActual.trim() : null;
   }
 
   if (typeof nextPhotoUrl !== 'undefined') {

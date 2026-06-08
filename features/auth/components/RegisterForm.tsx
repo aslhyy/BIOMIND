@@ -1,7 +1,8 @@
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
+import type { ComponentProps } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Animated as RNAnimated,
@@ -13,74 +14,48 @@ import {
   View,
 } from 'react-native';
 import { registrar } from '../../../services/auth';
-import { ROLES } from '../constants';
 import { registerStyles } from '../styles/registerForm.styles';
 import { mapAuthErrorToAlert, validateEmail, validatePassword } from '../utils/authFeedback';
 import type { RegisterFormProps } from '../types';
 
+type RegisterField = 'nombre' | 'identificacion' | 'correo' | 'contrasena' | 'confirmarContrasena';
+type IoniconName = ComponentProps<typeof Ionicons>['name'];
+
 const AnimatedText = RNAnimated.createAnimatedComponent(Text);
 
 export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: RegisterFormProps) {
-  const animations = {
+  const animations: Record<RegisterField, RNAnimated.Value> = {
     nombre: useState(new RNAnimated.Value(0))[0],
     identificacion: useState(new RNAnimated.Value(0))[0],
-    programa: useState(new RNAnimated.Value(0))[0],
-    ficha: useState(new RNAnimated.Value(0))[0],
     correo: useState(new RNAnimated.Value(0))[0],
     contrasena: useState(new RNAnimated.Value(0))[0],
-    rol: useState(new RNAnimated.Value(0))[0],
+    confirmarContrasena: useState(new RNAnimated.Value(0))[0],
   };
-
   const [form, setForm] = useState({
     nombre: '',
     identificacion: '',
-    programa: '',
-    ficha: '',
     correo: '',
     contrasena: '',
-    rol: '',
+    confirmarContrasena: '',
     fotoPerfilUri: '',
     fotoPerfilBase64: '',
     fotoPerfilMimeType: 'image/jpeg',
   });
   const [showPass, setShowPass] = useState(false);
-  const [showRoles, setShowRoles] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const skipsProgramAndFicha = ['Instructor', 'Pasante'].includes(form.rol);
-
-  const animateFocus = (field: keyof typeof animations, toValue: number) => {
-    RNAnimated.timing(animations[field], {
-      toValue,
-      duration: 250,
-      useNativeDriver: false,
-    }).start();
-  };
-
-  const iconColor = animations.nombre.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['#B6B6B6', '#2FC4B1'],
-  });
-
-  const getIconColor = (field: keyof typeof animations) =>
-    animations[field].interpolate({
-      inputRange: [0, 1],
-      outputRange: ['#B6B6B6', '#2FC4B1'],
-    });
 
   const update = (field: keyof typeof form, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleRoleSelect = (rol: string) => {
-    update('rol', rol);
-
-    if (['Instructor', 'Pasante'].includes(rol)) {
-      update('programa', '');
-      update('ficha', '');
-    }
-
-    setShowRoles(false);
+  const animateFocus = (field: RegisterField, toValue: number) => {
+    RNAnimated.timing(animations[field], {
+      toValue,
+      duration: 250,
+      useNativeDriver: false,
+    }).start();
   };
 
   const pickProfilePhoto = async () => {
@@ -93,7 +68,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         showAlert({
           variant: 'warning',
           title: 'Permiso requerido',
-          message: 'Necesitamos permiso para abrir tu galería y elegir una foto.',
+          message: 'Necesitamos permiso para abrir tu galeria y elegir una foto.',
         });
         return;
       }
@@ -111,7 +86,6 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       }
 
       const asset = result.assets[0];
-
       update('fotoPerfilUri', asset.uri);
       update('fotoPerfilBase64', asset.base64 || '');
       update('fotoPerfilMimeType', asset.mimeType || 'image/jpeg');
@@ -119,12 +93,12 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       showAlert({
         variant: 'info',
         title: 'Foto seleccionada',
-        message: 'Tu foto de perfil quedó lista para guardarse con el registro.',
+        message: 'Tu foto de perfil quedo lista para guardarse con el registro.',
       });
-    } catch (error) {
+    } catch {
       showAlert({
         variant: 'error',
-        title: 'No pudimos abrir la galería',
+        title: 'No pudimos abrir la galeria',
         message: 'Intenta nuevamente para seleccionar tu foto.',
       });
     } finally {
@@ -133,17 +107,13 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   };
 
   const handleRegister = async () => {
-    const requiredValues = skipsProgramAndFicha
-      ? [form.nombre, form.identificacion, form.correo, form.contrasena, form.rol]
-      : [
-          form.nombre,
-          form.identificacion,
-          form.programa,
-          form.ficha,
-          form.correo,
-          form.contrasena,
-          form.rol,
-        ];
+    const requiredValues = [
+      form.nombre,
+      form.identificacion,
+      form.correo,
+      form.contrasena,
+      form.confirmarContrasena,
+    ];
 
     if (requiredValues.some((value) => !value.trim())) {
       showAlert({
@@ -157,8 +127,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     if (!validateEmail(form.correo.trim().toLowerCase())) {
       showAlert({
         variant: 'warning',
-        title: 'Correo inválido',
-        message: 'Escribe un correo con formato válido para continuar.',
+        title: 'Correo invalido',
+        message: 'Escribe un correo con formato valido para continuar.',
       });
       return;
     }
@@ -168,8 +138,17 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     if (!passwordValidation.isValid) {
       showAlert({
         variant: 'warning',
-        title: 'Contraseña insegura',
+        title: 'Contrasena insegura',
         message: passwordValidation.message,
+      });
+      return;
+    }
+
+    if (form.contrasena !== form.confirmarContrasena) {
+      showAlert({
+        variant: 'warning',
+        title: 'Contrasenas distintas',
+        message: 'La contrasena y su confirmacion deben coincidir.',
       });
       return;
     }
@@ -184,12 +163,17 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
 
       showAlert({
         variant: 'success',
-        title: 'Registro exitoso',
+        title: registeredUser.rol === 'Administrador' ? 'Administrador creado' : 'Registro exitoso',
         message:
-          'Te enviamos un enlace de verificación a tu correo. Abre ese enlace y luego inicia sesión en Biomind.',
+          registeredUser.rol === 'Administrador'
+            ? 'Te enviamos un enlace de verificacion. Al verificar tu correo podras entrar como administrador.'
+            : 'Te enviamos un enlace de verificacion. Luego el administrador debe asignarte un rol para ingresar.',
       });
 
-      onRegistered(registeredUser.correo);
+      onRegistered({
+        correo: registeredUser.correo,
+        contrasena: form.contrasena,
+      });
     } catch (error) {
       showAlert(mapAuthErrorToAlert(error));
     } finally {
@@ -204,53 +188,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         <Text style={registerStyles.backText}>Volver</Text>
       </Pressable>
 
-      <Text style={registerStyles.title}>REGÍSTRATE</Text>
-
-      <Text style={registerStyles.label}>Rol</Text>
-      <TouchableOpacity onPress={() => setShowRoles(!showRoles)} activeOpacity={0.7}>
-        <RNAnimated.View
-          style={[
-            registerStyles.inputWrapper,
-            {
-              borderBottomWidth: animations.rol.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
-            },
-          ]}>
-          <Ionicons
-            name="people-outline"
-            size={18}
-            color={showRoles || form.rol ? '#2FC4B1' : '#B6B6B6'}
-            style={registerStyles.inputIcon}
-          />
-          <Text style={[registerStyles.input, !form.rol && { color: '#B0C4BB' }]}>
-            {form.rol || 'Selecciona tu rol'}
-          </Text>
-          <Ionicons
-            name={showRoles ? 'chevron-up-outline' : 'chevron-down-outline'}
-            size={16}
-            color={showRoles ? '#2FC4B1' : '#9AA8A0'}
-          />
-        </RNAnimated.View>
-      </TouchableOpacity>
-
-      {showRoles && (
-        <View style={registerStyles.dropdown}>
-          {ROLES.map((rol) => (
-            <TouchableOpacity
-              key={rol}
-              style={registerStyles.dropdownItem}
-              onPress={() => handleRoleSelect(rol)}>
-              <Text
-                style={[
-                  registerStyles.dropdownText,
-                  form.rol === rol && registerStyles.dropdownTextActive,
-                ]}>
-                {rol}
-              </Text>
-              {form.rol === rol && <Ionicons name="checkmark" size={16} color="#2FC4B1" />}
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
+      <Text style={registerStyles.title}>REGISTRATE</Text>
 
       <TouchableOpacity style={registerStyles.photoButton} onPress={pickProfilePhoto} activeOpacity={0.85}>
         {form.fotoPerfilUri ? (
@@ -267,290 +205,76 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         )}
       </TouchableOpacity>
 
-      <RNAnimated.Text
-        style={[
-          registerStyles.label,
-          {
-            color: animations.nombre.interpolate({
-              inputRange: [0, 1],
-              outputRange: ['#2FC4B1', '#2FC4B1'],
-            }),
-            transform: [
-              {
-                scale: animations.nombre.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
-              },
-            ],
-          },
-        ]}>
-        Usuario
-      </RNAnimated.Text>
-      <RNAnimated.View
-        style={[
-          registerStyles.inputWrapper,
-          {
-            borderBottomColor: animations.nombre.interpolate({
-              inputRange: [0, 1],
-              outputRange: ['#2FC4B1', '#2FC4B1'],
-            }),
-            borderBottomWidth: animations.nombre.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
-          },
-        ]}>
-        <AnimatedText
-          style={{
-            marginRight: 8,
-            transform: [
-              {
-                scale: animations.nombre.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }),
-              },
-            ],
-            color: iconColor,
-          }}>
-          <Ionicons name="person-outline" size={18} />
-        </AnimatedText>
-        <TextInput
-          style={registerStyles.input}
-          placeholder="Nombre completo"
-          placeholderTextColor="#88888859"
-          value={form.nombre}
-          onChangeText={(value) => update('nombre', value)}
-          autoCapitalize="words"
-          onFocus={() => animateFocus('nombre', 1)}
-          onBlur={() => animateFocus('nombre', 0)}
-        />
-      </RNAnimated.View>
+      <Text style={registerStyles.photoHint}>
+        El primer usuario sera administrador. Los siguientes usuarios esperan asignacion de rol.
+      </Text>
 
-      <RNAnimated.Text
-        style={[
-          registerStyles.label,
-          {
-            transform: [
-              {
-                scale: animations.identificacion.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, 1.01],
-                }),
-              },
-            ],
-          },
-        ]}>
-        Identificación
-      </RNAnimated.Text>
-      <RNAnimated.View
-        style={[
-          registerStyles.inputWrapper,
-          {
-            borderBottomWidth: animations.identificacion.interpolate({
-              inputRange: [0, 1],
-              outputRange: [1, 1.5],
-            }),
-          },
-        ]}>
-        <AnimatedText
-          style={{
-            marginRight: 8,
-            transform: [
-              {
-                scale: animations.identificacion.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, 1.15],
-                }),
-              },
-            ],
-            color: getIconColor('identificacion'),
-          }}>
-          <Ionicons name="card-outline" size={18} />
-        </AnimatedText>
-        <TextInput
-          style={registerStyles.input}
-          placeholder="Número de identificación"
-          placeholderTextColor="#88888859"
-          keyboardType="numeric"
-          value={form.identificacion}
-          onChangeText={(value) => update('identificacion', value)}
-          onFocus={() => animateFocus('identificacion', 1)}
-          onBlur={() => animateFocus('identificacion', 0)}
-        />
-      </RNAnimated.View>
+      <AnimatedField
+        animation={animations.nombre}
+        icon="person-outline"
+        label="Usuario"
+        placeholder="Nombre completo"
+        value={form.nombre}
+        onBlur={() => animateFocus('nombre', 0)}
+        onChangeText={(value) => update('nombre', value)}
+        onFocus={() => animateFocus('nombre', 1)}
+      />
 
-      <RNAnimated.Text
-        style={[
-          registerStyles.label,
-          {
-            transform: [
-              {
-                scale: animations.programa.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
-              },
-            ],
-          },
-        ]}>
-        Programa
-      </RNAnimated.Text>
-      <RNAnimated.View
-        style={[
-          registerStyles.inputWrapper,
-          skipsProgramAndFicha && { opacity: 0.55 },
-          {
-            borderBottomWidth: animations.programa.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
-          },
-        ]}>
-        <AnimatedText
-          style={{
-            marginRight: 8,
-            transform: [
-              {
-                scale: animations.programa.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }),
-              },
-            ],
-            color: getIconColor('programa'),
-          }}>
-          <Ionicons name="document-text-outline" size={18} />
-        </AnimatedText>
-        <TextInput
-          style={registerStyles.input}
-          editable={!skipsProgramAndFicha}
-          placeholder={skipsProgramAndFicha ? `No aplica para ${form.rol.toLowerCase()}` : 'Nombre del programa'}
-          placeholderTextColor="#88888859"
-          value={form.programa}
-          onChangeText={(value) => update('programa', value)}
-          onFocus={() => animateFocus('programa', 1)}
-          onBlur={() => animateFocus('programa', 0)}
-        />
-      </RNAnimated.View>
+      <AnimatedField
+        animation={animations.identificacion}
+        icon="card-outline"
+        keyboardType="numeric"
+        label="Identificacion"
+        placeholder="Numero de identificacion"
+        value={form.identificacion}
+        onBlur={() => animateFocus('identificacion', 0)}
+        onChangeText={(value) => update('identificacion', value)}
+        onFocus={() => animateFocus('identificacion', 1)}
+      />
 
-      <RNAnimated.Text
-        style={[
-          registerStyles.label,
-          {
-            transform: [
-              {
-                scale: animations.ficha.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
-              },
-            ],
-          },
-        ]}>
-        Número de ficha
-      </RNAnimated.Text>
-      <RNAnimated.View
-        style={[
-          registerStyles.inputWrapper,
-          skipsProgramAndFicha && { opacity: 0.55 },
-          {
-            borderBottomWidth: animations.ficha.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
-          },
-        ]}>
-        <AnimatedText style={{ marginRight: 8, color: getIconColor('ficha') }}>
-          <Ionicons name="school-outline" size={18} />
-        </AnimatedText>
-        <TextInput
-          style={registerStyles.input}
-          editable={!skipsProgramAndFicha}
-          placeholder={skipsProgramAndFicha ? `No aplica para ${form.rol.toLowerCase()}` : 'Número de ficha'}
-          placeholderTextColor="#88888859"
-          keyboardType="numeric"
-          value={form.ficha}
-          onChangeText={(value) => update('ficha', value)}
-          onFocus={() => animateFocus('ficha', 1)}
-          onBlur={() => animateFocus('ficha', 0)}
-        />
-      </RNAnimated.View>
+      <AnimatedField
+        animation={animations.correo}
+        autoCapitalize="none"
+        icon="mail-outline"
+        keyboardType="email-address"
+        label="Correo electronico"
+        placeholder="correo@ejemplo.com"
+        value={form.correo}
+        onBlur={() => animateFocus('correo', 0)}
+        onChangeText={(value) => update('correo', value)}
+        onFocus={() => animateFocus('correo', 1)}
+      />
 
-      <RNAnimated.Text
-        style={[
-          registerStyles.label,
-          {
-            transform: [
-              {
-                scale: animations.correo.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
-              },
-            ],
-          },
-        ]}>
-        Correo electrónico
-      </RNAnimated.Text>
-      <RNAnimated.View
-        style={[
-          registerStyles.inputWrapper,
-          {
-            borderBottomWidth: animations.correo.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
-          },
-        ]}>
-        <AnimatedText
-          style={{
-            marginRight: 8,
-            transform: [
-              {
-                scale: animations.correo.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }),
-              },
-            ],
-            color: getIconColor('correo'),
-          }}>
-          <Ionicons name="mail-outline" size={18} />
-        </AnimatedText>
-        <TextInput
-          style={registerStyles.input}
-          placeholder="correo@ejemplo.com"
-          placeholderTextColor="#88888859"
-          keyboardType="email-address"
-          autoCapitalize="none"
-          value={form.correo}
-          onChangeText={(value) => update('correo', value)}
-          onFocus={() => animateFocus('correo', 1)}
-          onBlur={() => animateFocus('correo', 0)}
-        />
-      </RNAnimated.View>
+      <AnimatedField
+        animation={animations.contrasena}
+        icon="key-outline"
+        label="Contrasena"
+        placeholder="Contrasena"
+        secureTextEntry={!showPass}
+        trailingIcon={showPass ? 'eye-off-outline' : 'eye-outline'}
+        value={form.contrasena}
+        onBlur={() => animateFocus('contrasena', 0)}
+        onChangeText={(value) => update('contrasena', value)}
+        onFocus={() => animateFocus('contrasena', 1)}
+        onTrailingPress={() => setShowPass((value) => !value)}
+      />
 
-      <RNAnimated.Text
-        style={[
-          registerStyles.label,
-          {
-            transform: [
-              {
-                scale: animations.contrasena.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
-              },
-            ],
-          },
-        ]}>
-        Contraseña
-      </RNAnimated.Text>
-      <RNAnimated.View
-        style={[
-          registerStyles.inputWrapper,
-          {
-            borderBottomWidth: animations.contrasena.interpolate({
-              inputRange: [0, 1],
-              outputRange: [1, 1.5],
-            }),
-          },
-        ]}>
-        <AnimatedText
-          style={{
-            marginRight: 8,
-            transform: [
-              {
-                scale: animations.contrasena.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }),
-              },
-            ],
-            color: getIconColor('contrasena'),
-          }}>
-          <Ionicons name="key-outline" size={18} />
-        </AnimatedText>
-        <TextInput
-          style={[registerStyles.input, { flex: 1 }]}
-          placeholder="Contraseña"
-          placeholderTextColor="#88888859"
-          secureTextEntry={!showPass}
-          value={form.contrasena}
-          onChangeText={(value) => update('contrasena', value)}
-          onFocus={() => animateFocus('contrasena', 1)}
-          onBlur={() => animateFocus('contrasena', 0)}
-        />
-        <TouchableOpacity onPress={() => setShowPass(!showPass)}>
-          <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color="#9AA8A0" />
-        </TouchableOpacity>
-      </RNAnimated.View>
+      <AnimatedField
+        animation={animations.confirmarContrasena}
+        icon="lock-closed-outline"
+        label="Confirmar contrasena"
+        placeholder="Repite tu contrasena"
+        secureTextEntry={!showConfirmPass}
+        trailingIcon={showConfirmPass ? 'eye-off-outline' : 'eye-outline'}
+        value={form.confirmarContrasena}
+        onBlur={() => animateFocus('confirmarContrasena', 0)}
+        onChangeText={(value) => update('confirmarContrasena', value)}
+        onFocus={() => animateFocus('confirmarContrasena', 1)}
+        onTrailingPress={() => setShowConfirmPass((value) => !value)}
+      />
 
       <Text style={registerStyles.passwordHint}>
-        Usa mínimo 8 caracteres, una mayúscula, una minúscula y un número.
+        Usa minimo 8 caracteres, una mayuscula, una minuscula y un numero.
       </Text>
 
       <TouchableOpacity style={registerStyles.button} onPress={handleRegister} activeOpacity={0.85}>
@@ -565,9 +289,99 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       </TouchableOpacity>
 
       <TouchableOpacity style={registerStyles.linkContainer} onPress={onGoLogin}>
-        <Text style={registerStyles.linkText}>¿Ya tienes cuenta? </Text>
-        <Text style={[registerStyles.linkText, registerStyles.linkBold]}>Inicia sesión</Text>
+        <Text style={registerStyles.linkText}>Ya tienes cuenta? </Text>
+        <Text style={[registerStyles.linkText, registerStyles.linkBold]}>Inicia sesion</Text>
       </TouchableOpacity>
     </ScrollView>
+  );
+}
+
+function AnimatedField({
+  animation,
+  autoCapitalize = 'sentences',
+  icon,
+  keyboardType = 'default',
+  label,
+  onBlur,
+  onChangeText,
+  onFocus,
+  onTrailingPress,
+  placeholder,
+  secureTextEntry = false,
+  trailingIcon,
+  value,
+}: {
+  animation: RNAnimated.Value;
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  icon: IoniconName;
+  keyboardType?: 'default' | 'email-address' | 'numeric';
+  label: string;
+  onBlur: () => void;
+  onChangeText: (value: string) => void;
+  onFocus: () => void;
+  onTrailingPress?: () => void;
+  placeholder: string;
+  secureTextEntry?: boolean;
+  trailingIcon?: IoniconName;
+  value: string;
+}) {
+  const iconColor = animation.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['#B6B6B6', '#2FC4B1'],
+  });
+
+  return (
+    <>
+      <RNAnimated.Text
+        style={[
+          registerStyles.label,
+          {
+            transform: [
+              {
+                scale: animation.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
+              },
+            ],
+          },
+        ]}>
+        {label}
+      </RNAnimated.Text>
+      <RNAnimated.View
+        style={[
+          registerStyles.inputWrapper,
+          {
+            borderBottomWidth: animation.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
+          },
+        ]}>
+        <AnimatedText
+          style={{
+            marginRight: 8,
+            transform: [
+              {
+                scale: animation.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }),
+              },
+            ],
+            color: iconColor,
+          }}>
+          <Ionicons name={icon} size={18} />
+        </AnimatedText>
+        <TextInput
+          autoCapitalize={autoCapitalize}
+          keyboardType={keyboardType}
+          onBlur={onBlur}
+          onChangeText={onChangeText}
+          onFocus={onFocus}
+          placeholder={placeholder}
+          placeholderTextColor="#88888859"
+          secureTextEntry={secureTextEntry}
+          style={[registerStyles.input, { flex: 1 }]}
+          value={value}
+        />
+        {trailingIcon && onTrailingPress ? (
+          <TouchableOpacity onPress={onTrailingPress}>
+            <Ionicons name={trailingIcon} size={18} color="#9AA8A0" />
+          </TouchableOpacity>
+        ) : null}
+      </RNAnimated.View>
+    </>
   );
 }

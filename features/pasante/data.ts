@@ -44,8 +44,8 @@ export const pasanteMetrics: PasanteMetric[] = [
     value: '4',
     label: 'Cultivos',
     caption: 'En apoyo técnico',
-    accent: pasantePalette.secondary,
-    soft: pasantePalette.aquaSoft,
+    accent: pasantePalette.green,
+    soft: pasantePalette.softGreen,
   },
   {
     id: 'evidence',
@@ -62,7 +62,7 @@ export const pasanteMetrics: PasanteMetric[] = [
     value: '6',
     label: 'Validaciones',
     caption: 'Con instructor',
-    accent: pasantePalette.primary,
+    accent: '#E4A45A',
     soft: pasantePalette.aqua,
   },
 ];

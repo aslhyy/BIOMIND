@@ -1,6 +1,7 @@
 import { Redirect, Stack } from 'expo-router';
 import { Component, type ReactNode } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AdminWorkspace } from '@/features/admin/components/AdminWorkspace';
 import { InstructorWorkspace } from '@/features/instructor/components/InstructorWorkspace';
 import { LearnerWorkspace } from '@/features/learner/components/LearnerWorkspace';
 import { PasanteWorkspace } from '@/features/pasante/components/PasanteWorkspace';
@@ -112,20 +113,49 @@ export default function DashboardScreen() {
   };
 
   const normalizedRole = (profile.rol || '').trim().toLowerCase();
+  const isAdmin = ['administrador', 'admin'].includes(normalizedRole);
   const isInstructor = normalizedRole === 'instructor';
   const isPasante = normalizedRole === 'pasante';
+  const isLearner = normalizedRole === 'aprendiz';
+
+  if (!normalizedRole) {
+    return (
+      <>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.loadingScreen}>
+          <Text style={styles.loadingText}>Tu cuenta esta pendiente de rol.</Text>
+          <Text style={styles.helperText}>
+            Un administrador debe asignarte Aprendiz, Instructor, Pasante o Administrador para ingresar.
+          </Text>
+          <Pressable onPress={cerrarSesion} style={styles.signOutButton}>
+            <Text style={styles.signOutText}>Cerrar sesion</Text>
+          </Pressable>
+        </View>
+      </>
+    );
+  }
 
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
-      {isInstructor ? (
+      {isAdmin ? (
+        <AdminWorkspace session={session} onSignOut={cerrarSesion} />
+      ) : isInstructor ? (
         <InstructorWorkspace session={session} onSignOut={cerrarSesion} />
       ) : isPasante ? (
         <WorkspaceCrashGuard>
           <PasanteWorkspace session={session} onSignOut={cerrarSesion} />
         </WorkspaceCrashGuard>
-      ) : (
+      ) : isLearner ? (
         <LearnerWorkspace session={session} onSignOut={cerrarSesion} />
+      ) : (
+        <View style={styles.loadingScreen}>
+          <Text style={styles.loadingText}>Rol no reconocido.</Text>
+          <Text style={styles.helperText}>Pide al administrador revisar el rol asignado a tu cuenta.</Text>
+          <Pressable onPress={cerrarSesion} style={styles.signOutButton}>
+            <Text style={styles.signOutText}>Cerrar sesion</Text>
+          </Pressable>
+        </View>
       )}
     </>
   );
@@ -149,5 +179,16 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     maxWidth: 280,
     textAlign: 'center',
+  },
+  signOutButton: {
+    backgroundColor: '#117C72',
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  signOutText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

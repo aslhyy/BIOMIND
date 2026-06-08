@@ -73,6 +73,13 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
         title: 'Perfil no encontrado',
         message: 'No encontramos la información del usuario en la base de datos.',
       };
+    case 'auth/role-not-assigned':
+      return {
+        variant: 'info',
+        title: 'Rol pendiente',
+        message:
+          'Tu cuenta está activa, pero aún no tiene un rol asignado. Espera la asignación del administrador para ingresar.',
+      };
     case 'auth/email-not-verified':
       return {
         variant: 'info',

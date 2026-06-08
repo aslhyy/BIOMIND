@@ -9,7 +9,7 @@ export const instructorPalette = {
   shadow: '#CFE5DF',
   primary: '#117C72',
   progress: '#549c67',
-  secondary: '#2FC4B1',
+  secondary: '#25BFA8',
   learner: '#A7DCA5',
   title: '#117C72',
   mint: '#DDF7F1',
@@ -20,7 +20,7 @@ export const instructorPalette = {
   greenText: '#117C72',
   coralText: '#8D6D60',
   coral: '#FFD7CB',
-  gold: '#FFD89C',
+  gold: '#FFF0D5',
   dark: '#163B36',
   peachSurface: '#FFF3EE',
 };

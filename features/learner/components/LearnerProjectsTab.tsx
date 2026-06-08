@@ -1,7 +1,7 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { learnerBitacoras, learnerProjects } from '../data';
+import { learnerBitacoras, learnerCompetencies, learnerProjects } from '../data';
 import { learnerPalette } from '@/features/learner/theme';
 import { IconLabel, ProgressBar, SectionHeading, StatusBadge } from '@/features/learner/components/LearnerUI';
 import { LearnerTrendChart } from './LearnerTrendChart';
@@ -125,6 +125,38 @@ export function LearnerProjectsTab({
               />
             </View>
             <Text style={styles.historyText}>{item.detail}</Text>
+          </View>
+        ))}
+      </View>
+
+      <SectionHeading
+        actionLabel="RAP"
+        subtitle="Competencias y resultados asociados a tus proyectos."
+        title="Avance academico"
+      />
+
+      <View style={styles.stack}>
+        {learnerCompetencies.map((competency, index) => (
+          <View key={competency.id} style={styles.academicCard}>
+            <View style={styles.academicHeader}>
+              <View style={styles.academicIcon}>
+                <MaterialCommunityIcons name="book-check-outline" size={18} color={learnerPalette.primary} />
+              </View>
+              <View style={styles.academicCopy}>
+                <Text style={styles.historyTitle}>{competency.competency}</Text>
+                <Text style={styles.historyDate}>{competency.evidence} - {competency.ficha}</Text>
+              </View>
+              <StatusBadge
+                accent={index === 0 ? learnerPalette.aqua : competency.status === 'Activa' ? learnerPalette.progress : '#EAA189'}
+                label={index === 0 ? 'Aprobado' : competency.status}
+                soft={index === 0 ? '#EAFBF7' : competency.status === 'Activa' ? '#E7F8E6' : '#FFF1EB'}
+              />
+            </View>
+            <ProgressBar
+              accent={index === 0 ? learnerPalette.aqua : learnerPalette.primary}
+              progress={index === 0 ? 100 : index === 1 ? 64 : 78}
+              soft="#EAF6F3"
+            />
           </View>
         ))}
       </View>
@@ -279,5 +311,33 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 18,
+  },
+  academicCard: {
+    backgroundColor: learnerPalette.surface,
+    borderRadius: 22,
+    padding: 16,
+    shadowColor: learnerPalette.shadow,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+    gap: 12,
+  },
+  academicHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  academicIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: learnerPalette.mint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  academicCopy: {
+    flex: 1,
+    gap: 2,
   },
 });

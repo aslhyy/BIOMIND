@@ -199,10 +199,10 @@ export function AuthScreen() {
     router.replace('/dashboard/dashboard');
   };
 
-  const handleRegistered = (correo: string) => {
-    setPendingVerification(null);
-    setPrefilledEmail(correo);
-    cambiarVista('login');
+  const handleRegistered = (pending: PendingVerification) => {
+    setPendingVerification(pending);
+    setPrefilledEmail(pending.correo);
+    cambiarVista('verify');
   };
 
   const handleRequiresVerification = (pending: PendingVerification) => {
@@ -298,6 +298,7 @@ export function AuthScreen() {
             <VerifyEmailForm
               pendingVerification={pendingVerification}
               onBack={handleVerificationBack}
+              onAuthenticated={handleAuthenticated}
               onReadyToLogin={handleReadyToLogin}
               showAlert={showAlert}
             />

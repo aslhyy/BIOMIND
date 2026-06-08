@@ -8,7 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { reenviarCorreoVerificacion } from '../../../services/auth';
+import { iniciarSesion, reenviarCorreoVerificacion } from '../../../services/auth';
 import { verifyStyles } from '../styles/verifyForm.styles';
 import type { VerifyEmailFormProps } from '../types';
 import { mapAuthErrorToAlert } from '../utils/authFeedback';
@@ -16,43 +16,64 @@ import { mapAuthErrorToAlert } from '../utils/authFeedback';
 const VERIFY_STEPS = [
   'Abre el correo que te enviamos desde Firebase Authentication.',
   'Pulsa el enlace para confirmar tu cuenta.',
-  'Vuelve a Biomind e inicia sesión con tu correo y contraseña.',
+  'Vuelve a Biomind y toca el boton para entrar.',
 ];
 
 export function VerifyEmailForm({
   pendingVerification,
   onBack,
+  onAuthenticated,
   onReadyToLogin,
   showAlert,
 }: VerifyEmailFormProps) {
   const [resending, setResending] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   const canResend = useMemo(
     () => Boolean(pendingVerification?.correo && pendingVerification?.contrasena),
     [pendingVerification?.contrasena, pendingVerification?.correo]
   );
 
-  const handleReturnToLogin = () => {
-    if (!pendingVerification?.correo) {
+  const handleVerifiedLogin = async () => {
+    if (!pendingVerification?.correo || !pendingVerification?.contrasena) {
       onBack();
       return;
     }
 
-    showAlert({
-      variant: 'info',
-      title: 'Listo para entrar',
-      message: 'Si ya abriste el enlace, vuelve a iniciar sesión para continuar.',
-    });
-    onReadyToLogin(pendingVerification.correo);
+    setChecking(true);
+
+    try {
+      await iniciarSesion(pendingVerification.correo, pendingVerification.contrasena);
+      showAlert({
+        variant: 'success',
+        title: 'Correo verificado',
+        message: 'Tu perfil ya esta listo.',
+      });
+      onAuthenticated();
+    } catch (error: any) {
+      if (error?.code === 'auth/email-not-verified') {
+        showAlert({
+          variant: 'warning',
+          title: 'Aun falta verificar',
+          message: 'Abre el enlace del correo y vuelve a tocar este boton.',
+        });
+        return;
+      }
+
+      showAlert(mapAuthErrorToAlert(error));
+      onReadyToLogin(pendingVerification.correo);
+    } finally {
+      setChecking(false);
+    }
   };
 
   const handleResend = async () => {
     if (!pendingVerification?.correo || !pendingVerification?.contrasena) {
       showAlert({
         variant: 'warning',
-        title: 'Vuelve a iniciar sesión',
+        title: 'Vuelve a iniciar sesion',
         message:
-          'Para reenviar el correo de verificación necesitamos que ingreses otra vez con tu correo y contraseña.',
+          'Para reenviar el correo de verificacion necesitamos que ingreses otra vez con tu correo y contrasena.',
       });
       onBack();
       return;
@@ -69,7 +90,7 @@ export function VerifyEmailForm({
         variant: 'success',
         title: 'Correo reenviado',
         message:
-          'Te enviamos un nuevo enlace de verificación. Revisa tu bandeja principal y también spam.',
+          'Te enviamos un nuevo enlace de verificacion. Revisa tu bandeja principal y tambien spam.',
       });
     } catch (error) {
       showAlert(mapAuthErrorToAlert(error));
@@ -87,8 +108,8 @@ export function VerifyEmailForm({
 
       <Text style={verifyStyles.title}>VERIFICA TU CORREO</Text>
       <Text style={verifyStyles.subtitle}>
-        Tu cuenta todavía no está confirmada. Biomind ahora usa el correo de verificación gratuito
-        de Firebase, así que solo necesitas abrir el enlace que llegó a tu correo.
+        Tu cuenta todavia no esta confirmada. Biomind ahora usa el correo de verificacion gratuito
+        de Firebase, asi que solo necesitas abrir el enlace que llego a tu correo.
       </Text>
 
       <View style={verifyStyles.emailPill}>
@@ -108,16 +129,23 @@ export function VerifyEmailForm({
       </View>
 
       <Text style={verifyStyles.helperText}>
-        Cuando ya lo hayas hecho, vuelve al inicio de sesión. Si no encuentras el correo, puedes
-        reenviarlo desde aquí.
+        Cuando ya lo hayas hecho, vuelve a Biomind y entra desde aqui. Si no encuentras el correo,
+        puedes reenviarlo desde aqui.
       </Text>
 
       <TouchableOpacity
         style={verifyStyles.primaryButton}
-        onPress={handleReturnToLogin}
-        activeOpacity={0.85}>
-        <Ionicons name="log-in-outline" size={20} color="white" />
-        <Text style={verifyStyles.primaryButtonText}>Volver al inicio de sesión</Text>
+        onPress={handleVerifiedLogin}
+        activeOpacity={0.85}
+        disabled={checking || resending}>
+        {checking ? (
+          <ActivityIndicator color="white" />
+        ) : (
+          <>
+            <Ionicons name="log-in-outline" size={20} color="white" />
+            <Text style={verifyStyles.primaryButtonText}>Ya verifique, entrar</Text>
+          </>
+        )}
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -127,7 +155,7 @@ export function VerifyEmailForm({
         ]}
         onPress={handleResend}
         activeOpacity={0.85}
-        disabled={!canResend || resending}>
+        disabled={!canResend || resending || checking}>
         {resending ? (
           <ActivityIndicator color="#117C72" />
         ) : (

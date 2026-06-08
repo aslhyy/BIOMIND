@@ -15,6 +15,33 @@ import { instructorPalette } from '../theme';
 import { IconLabel, ProgressBar, SectionHeading, SectionTitle, StatusBadge } from './InstructorUI';
 
 export function InstructorHomeTab() {
+  const validationItems = [
+    {
+      id: 'rap1',
+      title: 'RAP: implementar trazabilidad del cultivo',
+      detail: 'Ficha 3203082 - 14 aprendices en proceso, 6 listos para validar.',
+      status: 'En revision',
+      icon: 'clipboard-check-outline' as const,
+      accent: instructorPalette.primary,
+    },
+    {
+      id: 'rap2',
+      title: 'Competencia: controlar condiciones de esterilidad',
+      detail: 'Proyecto Fresas con evidencias fotograficas pendientes.',
+      status: 'Pendiente',
+      icon: 'shield-check-outline' as const,
+      accent: '#EAA189',
+    },
+    {
+      id: 'rap3',
+      title: 'Proyecto Orquideas',
+      detail: 'Aprobar o devolver entrega colaborativa del Equipo Alfa.',
+      status: 'Aprobar',
+      icon: 'briefcase-check-outline' as const,
+      accent: instructorPalette.secondary,
+    },
+  ];
+
   return (
     <>
       <View style={styles.startCard}>
@@ -72,6 +99,28 @@ export function InstructorHomeTab() {
       <View style={styles.quickActionsRow}>
         {quickActions.map((action) => (
           <QuickActionCard key={action.id} action={action} />
+        ))}
+      </View>
+
+      <SectionHeading
+        actionLabel="Validar"
+        subtitle="Aprobacion de proyectos, RAP, competencias y evidencias."
+        title="Validaciones academicas"
+      />
+      <View style={styles.stack}>
+        {validationItems.map((item) => (
+          <View key={item.id} style={styles.validationRow}>
+            <View style={[styles.validationIcon, { backgroundColor: `${item.accent}22` }]}>
+              <MaterialCommunityIcons name={item.icon} size={18} color={item.accent} />
+            </View>
+            <View style={styles.alertCopy}>
+              <View style={styles.alertHeader}>
+                <Text style={styles.alertTitle}>{item.title}</Text>
+                <StatusBadge accent={item.accent} label={item.status} soft={`${item.accent}1F`} />
+              </View>
+              <Text style={styles.alertText}>{item.detail}</Text>
+            </View>
+          </View>
         ))}
       </View>
 
@@ -328,6 +377,28 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 3,
+  },
+  validationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 22,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: instructorPalette.border,
+    shadowColor: instructorPalette.shadow,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  validationIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   alertIcon: {
     width: 36,

@@ -13,7 +13,7 @@ export default function Index() {
       <>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.loadingScreen}>
-          <ActivityIndicator size="large" color="#117C72" />
+          <ActivityIndicator size="large" color="#117C72" font-family="Poppins"/>
           <Text style={styles.loadingText}>Preparando Biomind...</Text>
         </View>
       </>

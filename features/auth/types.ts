@@ -44,13 +44,14 @@ export interface LoginFormProps {
 export interface RegisterFormProps {
   onBack: () => void;
   onGoLogin: () => void;
-  onRegistered: (correo: string) => void;
+  onRegistered: (pending: PendingVerification) => void;
   showAlert: ShowAuthAlert;
 }
 
 export interface VerifyEmailFormProps {
   pendingVerification: PendingVerification | null;
   onBack: () => void;
+  onAuthenticated: () => void;
   onReadyToLogin: (correo: string) => void;
   showAlert: ShowAuthAlert;
 }

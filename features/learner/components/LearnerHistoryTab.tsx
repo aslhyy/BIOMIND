@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   learnerBitacoras,
@@ -137,7 +138,31 @@ export function LearnerHistoryTab() {
                 />
               </View>
               <Text style={styles.detail}>{entry.detail}</Text>
-              <Text style={styles.imageMeta}>{entry.images} imagen(es) adjuntas</Text>
+              <View style={styles.cardFooter}>
+                <Text style={styles.imageMeta}>{entry.images} imagen(es) adjuntas</Text>
+                <View style={styles.entryActions}>
+                  <Pressable
+                    accessibilityLabel="Editar bitacora"
+                    onPress={() => {
+                      setEditingBitacoraId(entry.id);
+                      setDraftTitle(entry.title);
+                      setDraftBody(entry.detail);
+                    }}
+                    style={[styles.entryActionButton, styles.entryEditButton]}>
+                    <MaterialCommunityIcons name="pencil-outline" size={19} color="#D5D5D5" />
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel="Eliminar bitacora"
+                    onPress={() => {
+                      const nextEntries = bitacoras.filter((item) => item.id !== entry.id);
+                      setBitacoras(nextEntries);
+                      setEditingBitacoraId(nextEntries[0]?.id || '');
+                    }}
+                    style={[styles.entryActionButton, styles.entryDeleteButton]}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={19} color="#F09C84" />
+                  </Pressable>
+                </View>
+              </View>
             </View>
           </Pressable>
         ))}
@@ -405,6 +430,29 @@ const styles = StyleSheet.create({
     color: learnerPalette.greenText,
     fontFamily: 'PoppinsMedium',
     fontSize: 11,
+  },
+  cardFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  entryActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  entryActionButton: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  entryEditButton: {
+    backgroundColor: '#F5F5F5',
+  },
+  entryDeleteButton: {
+    backgroundColor: '#FFE4DA',
   },
   qaCard: {
     backgroundColor: learnerPalette.surface,

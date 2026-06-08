@@ -30,7 +30,6 @@ export function LearnerProfileTab({
   onVoiceSuggestionsChange,
 }: LearnerProfileTabProps) {
   const [name, setName] = useState(session.name);
-  const [trimester, setTrimester] = useState(session.trimestreActual || '');
   const [photoUri, setPhotoUri] = useState(session.photoUrl || '');
   const [photoBase64, setPhotoBase64] = useState('');
   const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
@@ -39,9 +38,8 @@ export function LearnerProfileTab({
 
   useEffect(() => {
     setName(session.name);
-    setTrimester(session.trimestreActual || '');
     setPhotoUri(session.photoUrl || '');
-  }, [session.name, session.photoUrl, session.trimestreActual]);
+  }, [session.name, session.photoUrl]);
 
   const pickProfilePhoto = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -83,7 +81,6 @@ export function LearnerProfileTab({
     try {
       const updatedProfile = await actualizarPerfilUsuario({
         nombre: name,
-        trimestreActual: trimester,
         fotoPerfilBase64: photoBase64 || undefined,
         fotoPerfilMimeType: photoBase64 ? photoMimeType : undefined,
       });
@@ -117,7 +114,11 @@ export function LearnerProfileTab({
           <Field label="Correo" value={session.email} editable={false} />
           <Field label="Programa" value={session.programa || 'Biotecnología vegetal'} editable={false} />
           <Field label="Ficha" value={session.ficha || 'Sin ficha'} editable={false} />
-          <Field label="Trimestre actual" value={trimester} onChangeText={setTrimester} />
+          <Field
+            label="Trimestre actual"
+            value={session.trimestreActual || 'Se calculara automaticamente segun tu ficha'}
+            editable={false}
+          />
         </View>
 
         <View style={styles.progressBlock}>

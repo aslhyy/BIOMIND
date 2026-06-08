@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ProgressBar, SectionHeading, SectionTitle, StatusBadge } from '@/features/instructor/components/InstructorUI';
+import { ProgressBar, StatusBadge } from '@/features/instructor/components/InstructorUI';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
@@ -44,10 +44,61 @@ const assistantPrompts: WorkspaceAssistantPrompt[] = [
   },
 ];
 
+const demoPasanteQuestions = [
+  {
+    id: 'q1',
+    learner: 'Nicolas Rodriguez',
+    projectId: 'orquideas',
+    question: 'La humedad bajo despues del cambio de medio. Debo repetir registro fotografico?',
+    answer: 'Si. Toma foto comparativa y reporta el valor antes de mover el frasco.',
+    status: 'Respondida',
+  },
+  {
+    id: 'q2',
+    learner: 'Mafe Rojas',
+    projectId: 'fresas',
+    question: 'Veo borde amarillento en dos explantes. Lo marco como alerta?',
+    answer: 'Pendiente de revisar con el instructor en la validacion de la tarde.',
+    status: 'Pendiente',
+  },
+];
+
+const demoPasanteObservations = [
+  {
+    id: 'obs1',
+    title: 'Observacion de contaminacion',
+    detail: 'Lote de fresas con dos frascos aislados y evidencia fotografica solicitada.',
+    target: 'Ficha 2693202 - Sarah Martinez',
+    status: 'Por validar',
+  },
+  {
+    id: 'obs2',
+    title: 'Resumen tecnico enviado',
+    detail: 'Arandanos mantiene enraizamiento estable; se recomienda conservar rutina de humedad.',
+    target: 'Ficha 2693203 - Mafe Pineda',
+    status: 'Compartida',
+  },
+];
+
+const demoInstructorMessages = [
+  {
+    id: 'msg1',
+    title: 'Reporte al instructor',
+    detail: 'Solicitar revision del lote F-03 por coloracion irregular y baja humedad.',
+    channel: 'Sarah Martinez',
+  },
+  {
+    id: 'msg2',
+    title: 'Novedad de practica',
+    detail: 'Aprendices de la ficha 2693201 completaron evidencias de semana 5.',
+    channel: 'Leonardo Rojas',
+  },
+];
+
 const bottomBarTone = {
   activeIcon: pasantePalette.primary,
   activePill: pasantePalette.secondary,
-  centerGradient: ['#E6FFF8', '#BFF5EC', '#45C9B0', '#158A77'] as [string, string, string, string],
+  centerGradient: ['#FFE8DF', '#F2B39A', '#D97862', '#B76552'] as [string, string, string, string],
   centerShadow: pasantePalette.secondary,
   inactiveIcon: pasantePalette.textMuted,
 };
@@ -61,7 +112,7 @@ const assistantTone = {
   dark: pasantePalette.dark,
   greenText: pasantePalette.primary,
   lavanderText: pasantePalette.primary,
-  mint: pasantePalette.aquaSoft,
+  mint: pasantePalette.surfaceMuted,
   primary: pasantePalette.primary,
   projectChipBg: pasantePalette.surfaceMuted,
   projectChipBorder: pasantePalette.border,
@@ -70,7 +121,7 @@ const assistantTone = {
   softGreen: pasantePalette.softGreen,
   surface: pasantePalette.surface,
   surfaceMuted: pasantePalette.aquaSoft,
-  switchActive: pasantePalette.green,
+  switchActive: pasantePalette.primary,
   text: pasantePalette.text,
   textMuted: pasantePalette.textMuted,
 };
@@ -89,9 +140,10 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
   const [assistantProjectId, setAssistantProjectId] = useState(pasanteProjects[0]?.id ?? 'general');
   const assignedFichas = Array.isArray(session.fichasAsignadas) ? session.fichasAsignadas : [];
   const assignedFichaSet = new Set(assignedFichas.map(String));
-  const assignedProjects = assignedFichaSet.size
+  const assignedProjectsFromSession = assignedFichaSet.size
     ? pasanteProjects.filter((project) => assignedFichaSet.has(project.ficha))
     : [];
+  const assignedProjects = assignedProjectsFromSession.length ? assignedProjectsFromSession : pasanteProjects;
   const assignedTasks = assignedProjects.length
     ? pasanteTasks.filter((task) => assignedProjects.some((project) => project.id === task.projectId))
     : [];
@@ -134,10 +186,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
               onOpenAssistant={openAssistantForProject}
             />
           )}
-          {activeTab === 'asistente' && assignedProjects.length === 0 && (
-            <EmptyAssignedState />
-          )}
-          {activeTab === 'asistente' && assignedProjects.length > 0 && (
+          {activeTab === 'asistente' && (
             <GeminiAssistantModule
               assistantQuestionsEnabledDefault
               composerPlaceholder="Escribe tus notas de práctica, dudas técnicas o hallazgos para convertirlos en evidencia..."
@@ -198,7 +247,7 @@ function HeaderCard({ session }: { session: AuthenticatedSession }) {
           <Text style={styles.headerBadgeText}>BIOMIND</Text>
         </View>
         <View style={styles.rolePill}>
-          <MaterialCommunityIcons name="account-tie-outline" size={14} color={pasantePalette.secondary} />
+          <MaterialCommunityIcons name="account-tie-outline" size={14} color={pasantePalette.primary} />
           <Text style={styles.rolePillText}>{session.role}</Text>
         </View>
       </View>
@@ -211,6 +260,36 @@ function HeaderCard({ session }: { session: AuthenticatedSession }) {
           </Text>
         </View>
         <UserAvatar name={session.name} photoUrl={session.photoUrl} size={82} />
+      </View>
+    </View>
+  );
+}
+
+function SectionHeading({
+  actionLabel,
+  subtitle,
+  title,
+}: {
+  actionLabel: string;
+  subtitle: string;
+  title: string;
+}) {
+  return (
+    <View style={styles.sectionHeader}>
+      <View style={styles.sectionCopy}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <Text style={styles.sectionSubtitle}>{subtitle}</Text>
+      </View>
+      <Text style={styles.sectionAction}>{actionLabel}</Text>
+    </View>
+  );
+}
+
+function SectionTitle({ title }: { title: string }) {
+  return (
+    <View style={styles.sectionHeader}>
+      <View style={styles.sectionCopy}>
+        <Text style={styles.sectionTitle}>{title}</Text>
       </View>
     </View>
   );
@@ -295,6 +374,39 @@ function PasanteTrackingTab({
         ) : (
           <EmptyAssignedState />
         )}
+      </View>
+
+      <SectionHeading
+        actionLabel="Preguntas"
+        subtitle="Consultas de aprendices asignados y respuestas de apoyo."
+        title="Preguntas y respuestas"
+      />
+      <View style={styles.stack}>
+        {demoPasanteQuestions.map((thread) => (
+          <QuestionCard key={thread.id} thread={thread} />
+        ))}
+      </View>
+
+      <SectionHeading
+        actionLabel="Observaciones"
+        subtitle="Notas tecnicas listas para revision o seguimiento."
+        title="Observaciones registradas"
+      />
+      <View style={styles.stack}>
+        {demoPasanteObservations.map((observation) => (
+          <ObservationCard key={observation.id} observation={observation} />
+        ))}
+      </View>
+
+      <SectionHeading
+        actionLabel="Instructor"
+        subtitle="Novedades y preguntas que el pasante eleva al instructor."
+        title="Comunicacion"
+      />
+      <View style={styles.stack}>
+        {demoInstructorMessages.map((message) => (
+          <InstructorMessageCard key={message.id} message={message} />
+        ))}
       </View>
     </>
   );
@@ -425,11 +537,6 @@ function PasanteProfileTab({
 
   return (
     <>
-      <IntroCard
-        label="Perfil del pasante"
-        text="Actualiza tus datos, tu foto y las preferencias del asistente para apoyar la práctica."
-        title="Información y configuración."
-      />
 
       <View style={styles.profileCard}>
         <Pressable onPress={pickProfilePhoto} style={styles.avatarWrap}>
@@ -487,13 +594,13 @@ function MetricCard({ metric }: { metric: PasanteMetric }) {
 }
 
 function ProjectCard({ project, onOpenAssistant }: { project: PasanteProject; onOpenAssistant: (projectId: string) => void }) {
-  const statusAccent = project.status === 'Por validar' ? '#EAA189' : project.status === 'Documentado' ? pasantePalette.green : pasantePalette.primary;
+  const statusAccent = project.status === 'Por validar' ? pasantePalette.secondary : project.status === 'Documentado' ? pasantePalette.green : pasantePalette.green;
 
   return (
     <View style={styles.projectCard}>
       <View style={styles.cardHeader}>
         <View style={styles.projectIcon}>
-          <MaterialCommunityIcons name="sprout-outline" size={18} color={pasantePalette.primary} />
+          <MaterialCommunityIcons name="sprout-outline" size={18} color={pasantePalette.green} />
         </View>
         <View style={styles.cardCopy}>
           <Text style={styles.cardTitle}>{project.title} - {project.species}</Text>
@@ -502,13 +609,13 @@ function ProjectCard({ project, onOpenAssistant }: { project: PasanteProject; on
         <Text style={styles.percent}>{project.progress}%</Text>
       </View>
 
-      <ProgressBar accent={pasantePalette.primary} progress={project.progress} soft={pasantePalette.aquaSoft} />
+      <ProgressBar accent={pasantePalette.green} progress={project.progress} soft={pasantePalette.softGreen} />
       <View style={styles.badgeRow}>
-        <StatusBadge accent={statusAccent} label={project.status} soft={project.status === 'Por validar' ? '#FFF1EB' : pasantePalette.aquaSoft} />
-        <StatusBadge accent={pasantePalette.secondary} label={`${project.evidenceCount} evidencias`} soft={pasantePalette.softGreen} />
+        <StatusBadge accent={statusAccent} label={project.status} soft={project.status === 'Por validar' ? '#FFF1EB' : pasantePalette.softGreen} />
+        <StatusBadge accent={pasantePalette.green} label={`${project.evidenceCount} evidencias`} soft={pasantePalette.softGreen} />
       </View>
       <Text style={styles.cardText}>{project.nextStep}</Text>
-      <Pressable onPress={() => onOpenAssistant(project.id)} style={styles.secondaryButton}>
+      <Pressable onPress={() => onOpenAssistant(project.id)} style={[styles.secondaryButton, styles.projectActionButton]}>
         <Text style={styles.secondaryButtonText}>Abrir asistente</Text>
       </Pressable>
     </View>
@@ -547,11 +654,73 @@ function TaskCard({
   );
 }
 
+function QuestionCard({ thread }: { thread: (typeof demoPasanteQuestions)[number] }) {
+  const accent = thread.status === 'Respondida' ? pasantePalette.green : pasantePalette.secondary;
+
+  return (
+    <View style={styles.questionCard}>
+      <View style={styles.cardHeader}>
+        <View style={[styles.taskIcon, { backgroundColor: `${accent}22` }]}>
+          <MaterialCommunityIcons name="comment-question-outline" size={18} color={accent} />
+        </View>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardTitle}>{thread.learner}</Text>
+          <Text style={styles.cardMeta}>{thread.status}</Text>
+        </View>
+        <StatusBadge accent={accent} label={thread.status} soft={`${accent}1F`} />
+      </View>
+      <Text style={styles.qaLabel}>Pregunta</Text>
+      <Text style={styles.cardText}>{thread.question}</Text>
+      <Text style={styles.qaLabel}>Respuesta</Text>
+      <Text style={styles.cardText}>{thread.answer}</Text>
+    </View>
+  );
+}
+
+function ObservationCard({ observation }: { observation: (typeof demoPasanteObservations)[number] }) {
+  const accent = observation.status === 'Compartida' ? pasantePalette.green : pasantePalette.primary;
+
+  return (
+    <View style={styles.taskCard}>
+      <View style={styles.cardHeader}>
+        <View style={[styles.taskIcon, { backgroundColor: `${accent}22` }]}>
+          <MaterialCommunityIcons name="note-edit-outline" size={18} color={accent} />
+        </View>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardTitle}>{observation.title}</Text>
+          <Text style={styles.cardMeta}>{observation.target}</Text>
+        </View>
+      </View>
+      <Text style={styles.cardText}>{observation.detail}</Text>
+      <View style={styles.badgeRow}>
+        <StatusBadge accent={accent} label={observation.status} soft={`${accent}1F`} />
+      </View>
+    </View>
+  );
+}
+
+function InstructorMessageCard({ message }: { message: (typeof demoInstructorMessages)[number] }) {
+  return (
+    <View style={styles.taskCard}>
+      <View style={styles.cardHeader}>
+        <View style={[styles.taskIcon, { backgroundColor: pasantePalette.surfaceMuted }]}>
+          <MaterialCommunityIcons name="account-voice" size={18} color={pasantePalette.primary} />
+        </View>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardTitle}>{message.title}</Text>
+          <Text style={styles.cardMeta}>Para {message.channel}</Text>
+        </View>
+      </View>
+      <Text style={styles.cardText}>{message.detail}</Text>
+    </View>
+  );
+}
+
 function EmptyAssignedState() {
   return (
     <View style={styles.emptyCard}>
       <MaterialCommunityIcons name="lock-outline" size={20} color={pasantePalette.primary} />
-      <Text style={styles.emptyTitle}>Sin fichas asignadas</Text>
+      <Text style={styles.emptyTitle}>Demo sin fichas reales</Text>
       <Text style={styles.emptyText}>
         Cuando el instructor asigne fichas a este pasante, aquí aparecerán sus aprendices, proyectos y tareas.
       </Text>
@@ -666,7 +835,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: pasantePalette.secondary,
+    backgroundColor: pasantePalette.primary,
   },
   headerBadgeText: {
     color: pasantePalette.surface,
@@ -715,6 +884,35 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     paddingHorizontal: 22,
     gap: 16,
+  },
+  sectionHeader: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+    gap: 14,
+    justifyContent: 'space-between',
+  },
+  sectionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  sectionTitle: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 20,
+    lineHeight: 28,
+  },
+  sectionSubtitle: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 13,
+    lineHeight: 18,
+    maxWidth: 300,
+  },
+  sectionAction: {
+    color: pasantePalette.text,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 12,
+    lineHeight: 18,
   },
   metricsRow: {
     flexDirection: 'row',
@@ -827,6 +1025,17 @@ const styles = StyleSheet.create({
     elevation: 3,
     gap: 10,
   },
+  questionCard: {
+    backgroundColor: pasantePalette.surface,
+    borderRadius: 22,
+    padding: 16,
+    shadowColor: pasantePalette.shadow,
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+    gap: 8,
+  },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -836,7 +1045,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: pasantePalette.aquaSoft,
+    backgroundColor: pasantePalette.softGreen,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -863,7 +1072,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   percent: {
-    color: pasantePalette.primary,
+    color: pasantePalette.green,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 13,
   },
@@ -878,12 +1087,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
+  qaLabel: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    marginTop: 2,
+  },
   secondaryButton: {
     alignSelf: 'flex-start',
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 999,
-    backgroundColor: pasantePalette.surfaceMuted,
+    backgroundColor: pasantePalette.aqua,
+  },
+  projectActionButton: {
+    alignSelf: 'flex-end',
   },
   secondaryButtonText: {
     color: pasantePalette.primary,
