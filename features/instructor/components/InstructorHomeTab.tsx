@@ -13,8 +13,10 @@ import {
 } from '../data';
 import { instructorPalette } from '../theme';
 import { IconLabel, ProgressBar, SectionHeading, SectionTitle, StatusBadge } from './InstructorUI';
+import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
+import type { AuthenticatedSession } from '@/features/workspace/types';
 
-export function InstructorHomeTab() {
+export function InstructorHomeTab({ session }: { session: AuthenticatedSession }) {
   const validationItems = [
     {
       id: 'rap1',
@@ -53,6 +55,18 @@ export function InstructorHomeTab() {
           ))}
         </View>
       </View>
+
+      <CurrentTrimesterSummary
+        colors={{
+          accent: instructorPalette.primary,
+          background: instructorPalette.surface,
+          border: instructorPalette.border,
+          iconBackground: instructorPalette.mint,
+          muted: instructorPalette.textMuted,
+          text: instructorPalette.text,
+        }}
+        session={session}
+      />
 
       <SectionHeading
         actionLabel="Fichas"

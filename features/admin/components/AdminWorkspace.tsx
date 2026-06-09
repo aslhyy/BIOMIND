@@ -1,3 +1,19 @@
+import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
+import type { AuthenticatedSession } from '@/features/workspace/types';
+import {
+  calcularTrimestreActual,
+  desactivarFicha,
+  desactivarPrograma,
+  desactivarTrimestre,
+  escucharFichas,
+  escucharProgramas,
+  escucharTrimestres,
+  guardarFicha,
+  guardarPrograma,
+  guardarTrimestre,
+} from '@/services/academic';
+import { asignarRolUsuario, escucharUsuariosAdmin } from '@/services/adminUsers';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -5,10 +21,6 @@ import type { ComponentProps, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { UserAvatar } from '@/features/workspace/components/UserAvatar';
-import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
-import type { AuthenticatedSession } from '@/features/workspace/types';
-import { asignarRolUsuario, escucharUsuariosAdmin } from '@/services/adminUsers';
 
 type AdminTab = 'inicio' | 'usuarios' | 'academico' | 'trimestres' | 'perfil';
 type AdminIconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
@@ -62,54 +74,50 @@ type AdminUser = {
   correoVerificado?: boolean;
 };
 
-const formationSheets = [
-  {
-    id: '3203082',
-    program: 'Biotecnologia Vegetal',
-    startDate: '08/04/26',
-    trimester: '1',
-    learners: 28,
-    instructors: ['Sarah Castro', 'Mafe Rojas'],
-    interns: ['Nicolas Rodriguez'],
-    status: 'Activa',
-  },
-  {
-    id: '3147272',
-    program: 'Biotecnologia Vegetal',
-    startDate: '01/02/26',
-    trimester: '2',
-    learners: 28,
-    instructors: ['Sarah Castro', 'Mafe Rojas'],
-    interns: ['Nicolas Rodriguez'],
-    status: 'Activa',
-  },
-];
+type AcademicProgram = {
+  id: string;
+  codigo?: string;
+  nombre?: string;
+  estado?: string;
+};
+
+type AcademicSheet = {
+  id: string;
+  numero?: string;
+  programaId?: string;
+  programaNombre?: string;
+  estado?: string;
+};
+
+type AcademicTrimester = {
+  id: string;
+  numero?: number;
+  fechaInicio?: string;
+  fechaFin?: string;
+  programaId?: string;
+  programaNombre?: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  estado?: string;
+};
+
+const formationSheets: { id: string; program: string; startDate: string; trimester: string; learners: number; instructors: string[]; interns: string[]; status: string }[] = [];
+
+const demoPrograms: AcademicProgram[] = [];
+
+const demoAcademicSheets: AcademicSheet[] = [];
+
+const demoTrimesters: AcademicTrimester[] = [];
+
+function isDemoRecord(id?: string) {
+  return String(id || '').startsWith('demo-');
+}
 
 const academicBlocks = [
-  {
-    title: 'Competencia',
-    value: 'Construir software de acuerdo con el diseno',
-    icon: 'certificate-outline',
-    accent: palette.mintText,
-  },
-  {
-    title: 'RAP',
-    value: 'Implementar interfaces y validar evidencias del aprendiz',
-    icon: 'clipboard-check-outline',
-    accent: palette.yellowText,
-  },
-  {
-    title: 'Proyecto',
-    value: 'Biomind: seguimiento academico con IA',
-    icon: 'lightbulb-on-outline',
-    accent: palette.greenText,
-  },
-  {
-    title: 'Grupo',
-    value: 'Equipo Alfa: 4 aprendices asociados a ficha 2879645',
-    icon: 'account-group-outline',
-    accent: palette.salmonText,
-  },
+  { title: 'Competencia', value: 'Competencia principal del programa', icon: 'certificate-outline', accent: palette.mintText },
+  { title: 'RAP', value: 'Resultado de aprendizaje esperado', icon: 'clipboard-check-outline', accent: palette.yellowText },
+  { title: 'Proyecto', value: 'Proyecto asociado al programa', icon: 'lightbulb-on-outline', accent: palette.greenText },
+  { title: 'Grupo', value: 'Descripción general del grupo', icon: 'account-group-outline', accent: palette.salmonText },
 ] as { title: string; value: string; icon: AdminIconName; accent: string }[];
 
 const adminFlows = [
@@ -136,6 +144,11 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState('');
   const [assigningUid, setAssigningUid] = useState<string | null>(null);
+  const [programs, setPrograms] = useState<AcademicProgram[]>([]);
+  const [sheets, setSheets] = useState<AcademicSheet[]>([]);
+  const [trimesters, setTrimesters] = useState<AcademicTrimester[]>([]);
+  const [academicLoading, setAcademicLoading] = useState(true);
+  const [academicError, setAcademicError] = useState('');
   const [fontsLoaded] = useFonts({
     PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
     PoppinsMedium: require('../../../assets/fonts/Poppins/Poppins-Medium.ttf'),
@@ -146,11 +159,13 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
   const counts = useMemo(
     () => ({
       pendingUsers: adminUsers.filter((user) => user.correoVerificado && !String(user.rol || '').trim()).length,
-      activeSheets: formationSheets.filter((sheet) => sheet.status === 'Activa').length,
+      activeSheets: (sheets.length ? sheets : demoAcademicSheets).filter((sheet) => sheet.estado !== 'Inactiva').length,
       learners: formationSheets.reduce((total, sheet) => total + sheet.learners, 0),
-      trimesterUpdates: formationSheets.length,
+      trimesterUpdates: (trimesters.length ? trimesters : demoTrimesters).filter(
+        (trimester) => trimester.estado !== 'Inactivo'
+      ).length,
     }),
-    [adminUsers]
+    [adminUsers, sheets, trimesters]
   );
 
   useEffect(() => {
@@ -168,6 +183,50 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
     );
 
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    setAcademicLoading(true);
+
+    const unsubscribers = [
+      escucharProgramas(
+        (nextPrograms: AcademicProgram[]) => {
+          setPrograms(nextPrograms);
+          setAcademicError('');
+          setAcademicLoading(false);
+        },
+        (error: any) => {
+          setAcademicError(error?.message || 'No pudimos cargar programas.');
+          setAcademicLoading(false);
+        }
+      ),
+      escucharFichas(
+        (nextSheets: AcademicSheet[]) => {
+          setSheets(nextSheets);
+          setAcademicError('');
+          setAcademicLoading(false);
+        },
+        (error: any) => {
+          setAcademicError(error?.message || 'No pudimos cargar fichas.');
+          setAcademicLoading(false);
+        }
+      ),
+      escucharTrimestres(
+        (nextTrimesters: AcademicTrimester[]) => {
+          setTrimesters(nextTrimesters);
+          setAcademicError('');
+          setAcademicLoading(false);
+        },
+        (error: any) => {
+          setAcademicError(error?.message || 'No pudimos cargar trimestres.');
+          setAcademicLoading(false);
+        }
+      ),
+    ];
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe?.());
+    };
   }, []);
 
   const handleAssignRole = async (uid: string, role: string) => {
@@ -207,8 +266,23 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
               onRoleChange={setSelectedRole}
             />
           )}
-          {activeTab === 'academico' && <AcademicTab />}
-          {activeTab === 'trimestres' && <TrimesterTab />}
+          {activeTab === 'academico' && (
+            <AcademicTab
+              error={academicError}
+              loading={academicLoading}
+              programs={programs.length ? programs : demoPrograms}
+              sheets={sheets.length ? sheets : demoAcademicSheets}
+            />
+          )}
+          {activeTab === 'trimestres' && (
+            <TrimesterTab
+              error={academicError}
+              loading={academicLoading}
+              programs={programs.length ? programs : demoPrograms}
+              sheets={sheets.length ? sheets : demoAcademicSheets}
+              trimesters={trimesters.length ? trimesters : demoTrimesters}
+            />
+          )}
           {activeTab === 'perfil' && <ProfileTab session={session} onSignOut={onSignOut} />}
         </ScrollView>
 
@@ -417,7 +491,70 @@ function UsersTab({
   );
 }
 
-function AcademicTab() {
+function AcademicTab({
+  error,
+  loading,
+  programs,
+  sheets,
+}: {
+  error: string;
+  loading: boolean;
+  programs: AcademicProgram[];
+  sheets: AcademicSheet[];
+}) {
+  const activePrograms = programs.filter((program) => program.estado !== 'Inactivo');
+  const [programForm, setProgramForm] = useState({ id: '', codigo: '', nombre: '' });
+  const [sheetForm, setSheetForm] = useState({ id: '', numero: '', programaId: activePrograms[0]?.id || '' });
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  useEffect(() => {
+    if (!sheetForm.programaId && activePrograms[0]?.id) {
+      setSheetForm((current) => ({ ...current, programaId: activePrograms[0].id }));
+    }
+  }, [activePrograms, sheetForm.programaId]);
+
+  const selectedProgram = activePrograms.find((program) => program.id === sheetForm.programaId) || activePrograms[0];
+  const canSaveSheet = Boolean(selectedProgram) && !isDemoRecord(selectedProgram?.id);
+
+  const submitProgram = async () => {
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      await guardarPrograma(programForm);
+      setProgramForm({ id: '', codigo: '', nombre: '' });
+      setFeedback('Programa guardado correctamente.');
+    } catch (submitError: any) {
+      setFeedback(submitError?.message || 'No pudimos guardar el programa.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitSheet = async () => {
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      if (!canSaveSheet) {
+        throw new Error('Crea primero un programa real para asociar la ficha.');
+      }
+
+      await guardarFicha({
+        ...sheetForm,
+        programaId: selectedProgram?.id || '',
+        programaNombre: selectedProgram?.nombre || selectedProgram?.codigo || '',
+      });
+      setSheetForm({ id: '', numero: '', programaId: selectedProgram?.id || '' });
+      setFeedback('Ficha guardada correctamente.');
+    } catch (submitError: any) {
+      setFeedback(submitError?.message || 'No pudimos guardar la ficha.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
       <PageTitle
@@ -426,9 +563,50 @@ function AcademicTab() {
         title="Academico"
       />
 
-      <Section title="Fichas de formacion" subtitle="Crear, consultar, editar, desactivar y asignar responsables">
-        {formationSheets.map((sheet) => (
-          <SheetCard key={sheet.id} sheet={sheet} />
+      <Section title="Programas" subtitle="Crear, listar, editar y desactivar programas">
+        {error ? <FeedbackBox icon="alert-circle-outline" text={error} tone="error" /> : null}
+        {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
+        <View style={styles.formCard}>
+          <AdminField label="Codigo" value={programForm.codigo} onChangeText={(codigo) => setProgramForm((current) => ({ ...current, codigo }))} />
+          <AdminField label="Nombre del programa" value={programForm.nombre} onChangeText={(nombre) => setProgramForm((current) => ({ ...current, nombre }))} />
+          <Pressable disabled={saving} onPress={submitProgram} style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{programForm.id ? 'Actualizar programa' : 'Crear programa'}</Text>}
+          </Pressable>
+        </View>
+
+        {loading ? <LoadingRow text="Cargando programas..." /> : null}
+        {programs.map((program) => (
+          <ProgramCard
+            key={program.id}
+            program={program}
+            onDeactivate={() => desactivarPrograma(program.id)}
+            onEdit={() => setProgramForm({ id: program.id, codigo: program.codigo || '', nombre: program.nombre || '' })}
+          />
+        ))}
+      </Section>
+
+      <Section title="Fichas de formacion" subtitle="Crear ficha, asociarla a programa, editar y desactivar">
+        <View style={styles.formCard}>
+          <AdminField label="Numero de ficha" value={sheetForm.numero} onChangeText={(numero) => setSheetForm((current) => ({ ...current, numero }))} />
+          <OptionPicker
+            emptyLabel="Primero crea un programa"
+            options={activePrograms.map((program) => ({ label: `${program.codigo || 'Programa'} - ${program.nombre || ''}`, value: program.id }))}
+            value={sheetForm.programaId}
+            onChange={(programaId) => setSheetForm((current) => ({ ...current, programaId }))}
+          />
+          <Pressable disabled={saving || !canSaveSheet} onPress={submitSheet} style={[styles.formButton, (saving || !canSaveSheet) && styles.smallButtonDisabled]}>
+            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{sheetForm.id ? 'Actualizar ficha' : 'Crear ficha'}</Text>}
+          </Pressable>
+        </View>
+
+        {sheets.map((sheet, index) => (
+          <SheetCard
+            index={index}
+            key={sheet.id}
+            sheet={sheet}
+            onDeactivate={() => desactivarFicha(sheet.id)}
+            onEdit={() => setSheetForm({ id: sheet.id, numero: sheet.numero || '', programaId: sheet.programaId || activePrograms[0]?.id || '' })}
+          />
         ))}
       </Section>
 
@@ -450,7 +628,78 @@ function AcademicTab() {
   );
 }
 
-function TrimesterTab() {
+function TrimesterTab({
+  error,
+  loading,
+  programs,
+  sheets,
+  trimesters,
+}: {
+  error: string;
+  loading: boolean;
+  programs: AcademicProgram[];
+  sheets: AcademicSheet[];
+  trimesters: AcademicTrimester[];
+}) {
+  const activePrograms = programs.filter((program) => program.estado !== 'Inactivo');
+  const activeSheets = sheets.filter((sheet) => sheet.estado !== 'Inactiva');
+  const [form, setForm] = useState({
+    id: '',
+    numero: '1',
+    fechaInicio: '',
+    fechaFin: '',
+    programaId: activePrograms[0]?.id || '',
+    fichaId: activeSheets[0]?.id || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const currentTrimester = calcularTrimestreActual(trimesters);
+
+  useEffect(() => {
+    setForm((current) => ({
+      ...current,
+      programaId: current.programaId || activePrograms[0]?.id || '',
+      fichaId: current.fichaId || activeSheets[0]?.id || '',
+    }));
+  }, [activePrograms, activeSheets]);
+
+  const selectedProgram = activePrograms.find((program) => program.id === form.programaId) || activePrograms[0];
+  const selectedSheet = activeSheets.find((sheet) => sheet.id === form.fichaId) || activeSheets[0];
+  const canSaveTrimester =
+    Boolean(selectedProgram && selectedSheet) && !isDemoRecord(selectedProgram?.id) && !isDemoRecord(selectedSheet?.id);
+
+  const submitTrimester = async () => {
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      if (!canSaveTrimester) {
+        throw new Error('Crea primero un programa y una ficha reales para asociar el trimestre.');
+      }
+
+      await guardarTrimestre({
+        ...form,
+        programaId: selectedProgram?.id || '',
+        programaNombre: selectedProgram?.nombre || selectedProgram?.codigo || '',
+        fichaId: selectedSheet?.id || '',
+        fichaNumero: selectedSheet?.numero || '',
+      });
+      setForm({
+        id: '',
+        numero: '1',
+        fechaInicio: '',
+        fechaFin: '',
+        programaId: selectedProgram?.id || '',
+        fichaId: selectedSheet?.id || '',
+      });
+      setFeedback('Trimestre guardado correctamente.');
+    } catch (submitError: any) {
+      setFeedback(submitError?.message || 'No pudimos guardar el trimestre.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
       <PageTitle
@@ -459,26 +708,57 @@ function TrimesterTab() {
         title="Trimestres"
       />
 
+      <Section title="Crear trimestre" subtitle="Numero, fechas, programa y ficha asociada">
+        {error ? <FeedbackBox icon="alert-circle-outline" text={error} tone="error" /> : null}
+        {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
+        <View style={styles.formCard}>
+          <AdminField label="Numero" keyboardType="numeric" value={form.numero} onChangeText={(numero) => setForm((current) => ({ ...current, numero }))} />
+          <AdminField label="Fecha inicio (AAAA-MM-DD)" value={form.fechaInicio} onChangeText={(fechaInicio) => setForm((current) => ({ ...current, fechaInicio }))} />
+          <AdminField label="Fecha fin (AAAA-MM-DD)" value={form.fechaFin} onChangeText={(fechaFin) => setForm((current) => ({ ...current, fechaFin }))} />
+          <OptionPicker
+            emptyLabel="Primero crea un programa"
+            options={activePrograms.map((program) => ({ label: `${program.codigo || 'Programa'} - ${program.nombre || ''}`, value: program.id }))}
+            value={form.programaId}
+            onChange={(programaId) => setForm((current) => ({ ...current, programaId }))}
+          />
+          <OptionPicker
+            emptyLabel="Primero crea una ficha"
+            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+            value={form.fichaId}
+            onChange={(fichaId) => setForm((current) => ({ ...current, fichaId }))}
+          />
+          <Pressable disabled={saving || !canSaveTrimester} onPress={submitTrimester} style={[styles.formButton, (saving || !canSaveTrimester) && styles.smallButtonDisabled]}>
+            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{form.id ? 'Actualizar trimestre' : 'Crear trimestre'}</Text>}
+          </Pressable>
+        </View>
+      </Section>
+
+      <Section title="Trimestre actual" subtitle="Calculado automaticamente segun las fechas configuradas">
+        {currentTrimester ? (
+          <CurrentTrimesterCard trimester={currentTrimester} />
+        ) : (
+          <FeedbackBox icon="calendar-alert" text="No hay trimestre activo para la fecha actual." tone="info" />
+        )}
+      </Section>
+
       <Section title="Calendario por ficha" subtitle="El sistema calcula el trimestre desde la fecha configurada">
-        {formationSheets.map((sheet, index) => (
-          <View key={sheet.id} style={styles.trimesterCard}>
-            <View style={styles.trimesterTop}>
-              <View style={styles.sheetTitleRow}>
-                <View style={styles.sheetNumberBadge}>
-                  <Text style={styles.sheetNumberText}>F{index + 1}</Text>
-                </View>
-                <View>
-                  <Text style={styles.sheetTitle}>Ficha {sheet.id}</Text>
-                  <Text style={styles.sheetProgram}>{sheet.program}</Text>
-                </View>
-              </View>
-            </View>
-            <View style={styles.timeline}>
-              <TimelineDot active label="Inicio" value={sheet.startDate} />
-              <TimelineDot active label="Actual" value={`Trimestre ${sheet.trimester}`} />
-              <TimelineDot label="Proximo" value="Auto" />
-            </View>
-          </View>
+        {loading ? <LoadingRow text="Cargando trimestres..." /> : null}
+        {trimesters.map((trimester) => (
+          <TrimesterCard
+            key={trimester.id}
+            trimester={trimester}
+            onDeactivate={() => desactivarTrimestre(trimester.id)}
+            onEdit={() =>
+              setForm({
+                id: trimester.id,
+                numero: String(trimester.numero || ''),
+                fechaInicio: trimester.fechaInicio || '',
+                fechaFin: trimester.fechaFin || '',
+                programaId: trimester.programaId || activePrograms[0]?.id || '',
+                fichaId: trimester.fichaId || activeSheets[0]?.id || '',
+              })
+            }
+          />
         ))}
       </Section>
 
@@ -692,31 +972,239 @@ function PermissionRow({ icon, role, text }: { icon: AdminIconName; role: string
   );
 }
 
-function SheetCard({ sheet }: { sheet: (typeof formationSheets)[number] }) {
-  const order = formationSheets.findIndex((item) => item.id === sheet.id) + 1;
+function ProgramCard({
+  onDeactivate,
+  onEdit,
+  program,
+}: {
+  onDeactivate: () => void;
+  onEdit: () => void;
+  program: AcademicProgram;
+}) {
+  const inactive = program.estado === 'Inactivo';
+  const demo = isDemoRecord(program.id);
+  return (
+    <View style={styles.sheetCard}>
+      <View style={styles.sheetHeader}>
+        <View style={styles.sheetTitleRow}>
+          <View style={styles.sheetNumberBadge}>
+            <MaterialCommunityIcons name="school-outline" size={18} color={palette.primary} />
+          </View>
+          <View>
+            <Text style={styles.sheetTitle}>{program.codigo || 'Programa'}</Text>
+            <Text style={styles.sheetProgram}>{program.nombre || 'Sin nombre'}</Text>
+          </View>
+        </View>
+        <StatusPill label={inactive ? 'Inactivo' : 'Activo'} tone={inactive ? 'danger' : 'success'} />
+      </View>
+      {demo ? (
+        <Text style={styles.demoHint}>Dato demo: crea un programa para administrarlo.</Text>
+      ) : (
+        <View style={styles.cardActions}>
+          <Pressable onPress={onEdit} style={styles.ghostButton}>
+            <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
+            <Text style={styles.ghostButtonText}>Editar</Text>
+          </Pressable>
+          {!inactive ? (
+            <Pressable onPress={onDeactivate} style={styles.dangerButton}>
+              <MaterialCommunityIcons name="cancel" size={16} color={palette.danger} />
+              <Text style={styles.dangerButtonText}>Desactivar</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function SheetCard({
+  index,
+  onDeactivate,
+  onEdit,
+  sheet,
+}: {
+  index: number;
+  onDeactivate: () => void;
+  onEdit: () => void;
+  sheet: AcademicSheet;
+}) {
+  const inactive = sheet.estado === 'Inactiva';
+  const demo = isDemoRecord(sheet.id);
 
   return (
     <View style={styles.sheetCard}>
       <View style={styles.sheetHeader}>
         <View style={styles.sheetTitleRow}>
           <View style={styles.sheetNumberBadge}>
-            <Text style={styles.sheetNumberText}>F{order}</Text>
+            <Text style={styles.sheetNumberText}>F{index + 1}</Text>
           </View>
           <View>
-            <Text style={styles.sheetTitle}>Ficha {sheet.id}</Text>
-            <Text style={styles.sheetProgram}>{sheet.program}</Text>
+            <Text style={styles.sheetTitle}>Ficha {sheet.numero || sheet.id}</Text>
+            <Text style={styles.sheetProgram}>{sheet.programaNombre || 'Sin programa asociado'}</Text>
           </View>
         </View>
-      </View>
-      <View style={styles.sheetStats}>
-        <MiniStat label="Aprendices" value={String(sheet.learners)} />
-        <MiniStat label="Instructores" value={String(sheet.instructors.length)} />
-        <MiniStat label="Pasantes" value={String(sheet.interns.length)} />
+        <StatusPill label={inactive ? 'Inactiva' : 'Activa'} tone={inactive ? 'danger' : 'success'} />
       </View>
       <View style={styles.assignmentBox}>
-        <AssignmentLine icon="account-school-outline" label="Instructores" value={sheet.instructors.join(', ')} />
-        <AssignmentLine icon="account-tie-outline" label="Pasantes" value={sheet.interns.join(', ')} />
+        <AssignmentLine icon="book-education-outline" label="Programa" value={sheet.programaNombre || 'Pendiente'} />
+        <AssignmentLine icon="link-variant" label="Relacion" value={`${sheet.programaNombre || 'Programa'} / Ficha ${sheet.numero || ''}`} />
       </View>
+      {demo ? (
+        <Text style={styles.demoHint}>Dato demo: crea una ficha real para administrarla.</Text>
+      ) : (
+        <View style={styles.cardActions}>
+          <Pressable onPress={onEdit} style={styles.ghostButton}>
+            <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
+            <Text style={styles.ghostButtonText}>Editar</Text>
+          </Pressable>
+          {!inactive ? (
+            <Pressable onPress={onDeactivate} style={styles.dangerButton}>
+              <MaterialCommunityIcons name="cancel" size={16} color={palette.danger} />
+              <Text style={styles.dangerButtonText}>Desactivar</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function TrimesterCard({
+  onDeactivate,
+  onEdit,
+  trimester,
+}: {
+  onDeactivate: () => void;
+  onEdit: () => void;
+  trimester: AcademicTrimester;
+}) {
+  const inactive = trimester.estado === 'Inactivo';
+  const demo = isDemoRecord(trimester.id);
+
+  return (
+    <View style={styles.trimesterCard}>
+      <View style={styles.trimesterTop}>
+        <View style={styles.sheetTitleRow}>
+          <View style={styles.sheetNumberBadge}>
+            <Text style={styles.sheetNumberText}>T{trimester.numero || '?'}</Text>
+          </View>
+          <View>
+            <Text style={styles.sheetTitle}>Ficha {trimester.fichaNumero || 'Sin ficha'}</Text>
+            <Text style={styles.sheetProgram}>{trimester.programaNombre || 'Sin programa'}</Text>
+          </View>
+        </View>
+        <StatusPill label={inactive ? 'Inactivo' : 'Activo'} tone={inactive ? 'danger' : 'success'} />
+      </View>
+      <View style={styles.timeline}>
+        <TimelineDot active label="Inicio" value={trimester.fechaInicio || 'Pendiente'} />
+        <TimelineDot active label="Fin" value={trimester.fechaFin || 'Pendiente'} />
+        <TimelineDot label="Actual" value={`T${trimester.numero || '?'}`} />
+      </View>
+      {demo ? (
+        <Text style={styles.demoHint}>Dato demo: crea un trimestre real para administrarlo.</Text>
+      ) : (
+        <View style={styles.cardActions}>
+          <Pressable onPress={onEdit} style={styles.ghostButton}>
+            <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
+            <Text style={styles.ghostButtonText}>Editar</Text>
+          </Pressable>
+          {!inactive ? (
+            <Pressable onPress={onDeactivate} style={styles.dangerButton}>
+              <MaterialCommunityIcons name="cancel" size={16} color={palette.danger} />
+              <Text style={styles.dangerButtonText}>Desactivar</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function CurrentTrimesterCard({ trimester }: { trimester: AcademicTrimester }) {
+  return (
+    <View style={styles.currentTrimesterCard}>
+      <MaterialCommunityIcons name="calendar-check-outline" size={24} color={palette.mintText} />
+      <View style={styles.userCopy}>
+        <Text style={styles.cardTitle}>Trimestre {trimester.numero}</Text>
+        <Text style={styles.cardText}>
+          Ficha {trimester.fichaNumero} - {trimester.programaNombre}
+        </Text>
+        <Text style={styles.cardMeta}>
+          {trimester.fechaInicio} a {trimester.fechaFin}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function StatusPill({ label, tone }: { label: string; tone: 'success' | 'danger' }) {
+  const color = tone === 'success' ? palette.mintText : palette.danger;
+  const backgroundColor = tone === 'success' ? palette.mint : palette.salmon;
+
+  return <Text style={[styles.statusPill, { backgroundColor, color }]}>{label}</Text>;
+}
+
+function AdminField({
+  keyboardType = 'default',
+  label,
+  onChangeText,
+  value,
+}: {
+  keyboardType?: 'default' | 'numeric';
+  label: string;
+  onChangeText: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <View style={styles.adminField}>
+      <Text style={styles.profileFieldLabel}>{label}</Text>
+      <TextInput
+        keyboardType={keyboardType}
+        onChangeText={onChangeText}
+        placeholderTextColor={palette.muted}
+        style={styles.profileInput}
+        value={value}
+      />
+    </View>
+  );
+}
+
+function OptionPicker({
+  emptyLabel,
+  onChange,
+  options,
+  value,
+}: {
+  emptyLabel: string;
+  onChange: (value: string) => void;
+  options: { label: string; value: string }[];
+  value: string;
+}) {
+  if (!options.length) {
+    return <FeedbackBox icon="information-outline" text={emptyLabel} tone="info" />;
+  }
+
+  return (
+    <View style={styles.optionWrap}>
+      {options.map((option) => (
+        <Pressable
+          key={option.value}
+          onPress={() => onChange(option.value)}
+          style={[styles.optionChip, value === option.value && styles.optionChipActive]}>
+          <Text style={[styles.optionChipText, value === option.value && styles.optionChipTextActive]}>
+            {option.label}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function LoadingRow({ text }: { text: string }) {
+  return (
+    <View style={styles.loadingCard}>
+      <ActivityIndicator color={palette.primary} />
+      <Text style={styles.cardText}>{text}</Text>
     </View>
   );
 }
@@ -1356,6 +1844,112 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: 'center',
     width: 36,
+  },
+  formCard: {
+    backgroundColor: palette.surface,
+    borderRadius: 20,
+    gap: 12,
+    padding: 16,
+  },
+  adminField: {
+    gap: 6,
+  },
+  formButton: {
+    alignItems: 'center',
+    backgroundColor: palette.primary,
+    borderRadius: 999,
+    justifyContent: 'center',
+    minHeight: 42,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  formButtonText: {
+    color: palette.surface,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  optionWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  optionChip: {
+    backgroundColor: palette.soft,
+    borderColor: 'transparent',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  optionChipActive: {
+    backgroundColor: palette.primary,
+  },
+  optionChipText: {
+    color: palette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  optionChipTextActive: {
+    color: palette.surface,
+  },
+  statusPill: {
+    borderRadius: 999,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 10,
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingLeft: 49,
+  },
+  ghostButton: {
+    alignItems: 'center',
+    backgroundColor: palette.soft,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  ghostButtonText: {
+    color: palette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  dangerButton: {
+    alignItems: 'center',
+    backgroundColor: palette.salmon,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  dangerButtonText: {
+    color: palette.danger,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  demoHint: {
+    color: palette.muted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 16,
+    paddingLeft: 49,
+  },
+  currentTrimesterCard: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderColor: palette.mint,
+    borderRadius: 22,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16,
   },
   actionRow: {
     alignItems: 'center',

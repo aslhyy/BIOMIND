@@ -120,7 +120,7 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
           {activeTab === 'inicio' && (
-            <LearnerHomeTab onOpenAssistant={openAssistantForProject} />
+            <LearnerHomeTab session={session} onOpenAssistant={openAssistantForProject} />
           )}
           {activeTab === 'historial' && <LearnerHistoryTab />}
           {activeTab === 'asistente' && (

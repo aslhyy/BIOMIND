@@ -1,16 +1,17 @@
-import * as ImagePicker from 'expo-image-picker';
+import { ProgressBar, StatusBadge } from '@/features/instructor/components/InstructorUI';
+import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
+import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
+import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+import { WorkspaceBottomBar, type BottomBarTab } from '@/features/workspace/components/WorkspaceBottomBar';
+import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
+import { actualizarPerfilUsuario } from '@/services/auth';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
+import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ProgressBar, StatusBadge } from '@/features/instructor/components/InstructorUI';
-import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
-import { UserAvatar } from '@/features/workspace/components/UserAvatar';
-import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
-import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
-import { actualizarPerfilUsuario } from '@/services/auth';
 import { pasanteMetrics, pasanteProjects, pasanteTasks, type PasanteMetric, type PasanteProject, type PasanteTask } from '../data';
 import { pasantePalette } from '../theme';
 
@@ -159,6 +160,30 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
     return null;
   }
 
+  // Bloqueo: si el pasante no tiene instructor asignado o no tiene fichas, mostrar mensaje claro
+  const hasInstructor = Boolean(session.instructorUid);
+  const hasFichas = assignedFichas.length > 0;
+
+  if (!hasInstructor || !hasFichas) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="dark" />
+        <View style={styles.screen}>
+          <View style={styles.centerBlock}>
+            <MaterialCommunityIcons name="alert-circle-outline" size={48} color={pasantePalette.primary} />
+            <Text style={styles.blockTitle}>Acceso restringido</Text>
+            <Text style={styles.blockText}>
+              { !hasInstructor
+                ? 'Aún no tienes un instructor asignado. Contacta al administrador para completar la asignación.'
+                : 'No tienes fichas asignadas. Pide al instructor que te asigne fichas para acceder a la aplicación.'
+              }
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const openAssistantForProject = (projectId: string) => {
     setAssistantProjectId(projectId);
     setActiveTab('asistente');
@@ -175,6 +200,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
           {activeTab === 'inicio' && (
             <PasanteHomeTab
               projects={assignedProjects}
+              session={session}
               tasks={assignedTasks}
               onOpenAssistant={openAssistantForProject}
             />
@@ -297,10 +323,12 @@ function SectionTitle({ title }: { title: string }) {
 
 function PasanteHomeTab({
   projects,
+  session,
   tasks,
   onOpenAssistant,
 }: {
   projects: PasanteProject[];
+  session: AuthenticatedSession;
   tasks: PasanteTask[];
   onOpenAssistant: (projectId: string) => void;
 }) {
@@ -314,6 +342,18 @@ function PasanteHomeTab({
           ))}
         </View>
       </View>
+
+      <CurrentTrimesterSummary
+        colors={{
+          accent: pasantePalette.primary,
+          background: pasantePalette.surface,
+          border: pasantePalette.border,
+          iconBackground: pasantePalette.surfaceMuted,
+          muted: pasantePalette.textMuted,
+          text: pasantePalette.text,
+        }}
+        session={session}
+      />
 
       <SectionHeading
         actionLabel="Hoy"
@@ -1186,6 +1226,26 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 999,
     backgroundColor: pasantePalette.primary,
+  },
+  centerBlock: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    gap: 14,
+  },
+  blockTitle: {
+    color: pasantePalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 18,
+    marginTop: 8,
+  },
+  blockText: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
   },
   primaryButtonText: {
     color: '#FFFFFF',

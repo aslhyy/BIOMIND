@@ -66,7 +66,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 124 }]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
-          {activeTab === 'inicio' && <InstructorHomeTab />}
+          {activeTab === 'inicio' && <InstructorHomeTab session={session} />}
           {activeTab === 'aprendices' && (
             <InstructorLearnersTab activeFilter={activeFilter} onFilterChange={setActiveFilter} roster={roster} />
           )}

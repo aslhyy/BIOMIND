@@ -18,11 +18,15 @@ import {
 } from '@/features/learner/components/LearnerUI';
 
 import { LearnerTrendChart } from './LearnerTrendChart';
+import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
+import type { AuthenticatedSession } from '@/features/workspace/types';
 
 export function LearnerHomeTab({
   onOpenAssistant,
+  session,
 }: {
   onOpenAssistant: (projectId: string, autoStartVoice?: boolean) => void;
+  session: AuthenticatedSession;
 }) {
   const highlightedProject = learnerProjects[0];
   const totalEvidence = learnerProjects.reduce((total, project) => total + project.evidenceCount, 0);
@@ -70,6 +74,18 @@ export function LearnerHomeTab({
           ))}
         </View>
       </View>
+
+      <CurrentTrimesterSummary
+        colors={{
+          accent: learnerPalette.primary,
+          background: learnerPalette.surface,
+          border: learnerPalette.border,
+          iconBackground: learnerPalette.softGreen,
+          muted: learnerPalette.textMuted,
+          text: learnerPalette.text,
+        }}
+        session={session}
+      />
 
       <SectionHeading
         actionLabel="Hoy"
