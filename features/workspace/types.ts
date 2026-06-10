@@ -11,6 +11,7 @@ export type AuthenticatedSession = {
   programa?: string | null;
   ficha?: string | null;
   fichasAsignadas?: string[];
+  instructorUid?: string | null;
   trimestreActual?: string | null;
 };
 

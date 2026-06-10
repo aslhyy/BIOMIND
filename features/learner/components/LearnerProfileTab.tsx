@@ -112,11 +112,21 @@ export function LearnerProfileTab({
         <View style={styles.formStack}>
           <Field label="Nombre" value={name} onChangeText={setName} />
           <Field label="Correo" value={session.email} editable={false} />
-          <Field label="Programa" value={session.programa || 'Biotecnología vegetal'} editable={false} />
-          <Field label="Ficha" value={session.ficha || 'Sin ficha'} editable={false} />
+          <Field
+            label="Programa"
+            value={session.programa || 'Aún no tienes programa asignado por el administrador.'}
+            editable={false}
+          />
+
+          <Field
+            label="Ficha"
+            value={session.ficha || 'Aún no tienes ficha asignada por el administrador.'}
+            editable={false}
+          />
+
           <Field
             label="Trimestre actual"
-            value={session.trimestreActual || 'Se calculara automaticamente segun tu ficha'}
+            value={session.trimestreActual || 'Aún no tienes trimestre asignado.'}
             editable={false}
           />
         </View>

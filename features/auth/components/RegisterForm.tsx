@@ -2,7 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import type { ComponentProps } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { obtenerProgramas } from '../../../services/academic';
 import {
   ActivityIndicator,
   Animated as RNAnimated,
@@ -20,6 +21,10 @@ import type { RegisterFormProps } from '../types';
 
 type RegisterField = 'nombre' | 'identificacion' | 'correo' | 'contrasena' | 'confirmarContrasena';
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
+type Programa = {
+  id: string;
+  nombre?: string;
+};
 
 const AnimatedText = RNAnimated.createAnimatedComponent(Text);
 
@@ -37,6 +42,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     correo: '',
     contrasena: '',
     confirmarContrasena: '',
+    programaId: '',
+    programa: '',
     fotoPerfilUri: '',
     fotoPerfilBase64: '',
     fotoPerfilMimeType: 'image/jpeg',
@@ -44,6 +51,39 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   const [showPass, setShowPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [programas, setProgramas] = useState<Programa[]>([]);
+  const [loadingProgramas, setLoadingProgramas] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function cargarProgramas() {
+      try {
+        const data = await obtenerProgramas();
+
+        if (mounted) {
+          setProgramas(data);
+        }
+      } catch {
+        showAlert({
+          variant: 'error',
+          title: 'No pudimos cargar programas',
+          message: 'Intenta nuevamente o pide al administrador revisar los programas.',
+        });
+      } finally {
+        if (mounted) {
+          setLoadingProgramas(false);
+        }
+      }
+    }
+
+    cargarProgramas();
+
+    return () => {
+      mounted = false;
+    };
+  }, [showAlert]);
+
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const update = (field: keyof typeof form, value: string) => {
@@ -115,6 +155,15 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       form.confirmarContrasena,
     ];
 
+    if (!form.programaId) {
+      showAlert({
+        variant: 'warning',
+        title: 'Programa requerido',
+        message: 'Selecciona el programa al que perteneces.',
+      });
+      return;
+    }
+
     if (requiredValues.some((value) => !value.trim())) {
       showAlert({
         variant: 'warning',
@@ -159,6 +208,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       const registeredUser = await registrar({
         ...form,
         correo: form.correo.trim().toLowerCase(),
+
       });
 
       showAlert({
@@ -244,6 +294,53 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         onChangeText={(value) => update('correo', value)}
         onFocus={() => animateFocus('correo', 1)}
       />
+
+      <Text style={registerStyles.label}>Programa</Text>
+
+      <View style={registerStyles.dropdown}>
+        {loadingProgramas ? (
+          <View style={registerStyles.dropdownItem}>
+            <ActivityIndicator color="#2FC4B1" />
+            <Text style={registerStyles.dropdownText}>Cargando programas...</Text>
+          </View>
+        ) : programas.length ? (
+          programas.map((programa) => {
+            const selected = form.programaId === programa.id;
+
+            return (
+              <TouchableOpacity
+                key={programa.id}
+                style={registerStyles.dropdownItem}
+                activeOpacity={0.85}
+                onPress={() =>
+                  setForm((prev) => ({
+                    ...prev,
+                    programaId: programa.id,
+                    programa: programa.nombre || programa.id,
+                  }))
+                }>
+                <Text
+                  style={[
+                    registerStyles.dropdownText,
+                    selected && registerStyles.dropdownTextActive,
+                  ]}>
+                  {programa.nombre || programa.id}
+                </Text>
+
+                {selected ? (
+                  <Ionicons name="checkmark-circle-outline" size={18} color="#2FC4B1" />
+                ) : null}
+              </TouchableOpacity>
+            );
+          })
+        ) : (
+          <View style={registerStyles.dropdownItem}>
+            <Text style={registerStyles.dropdownText}>
+              No hay programas creados por el administrador.
+            </Text>
+          </View>
+        )}
+      </View>
 
       <AnimatedField
         animation={animations.contrasena}

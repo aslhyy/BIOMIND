@@ -5,6 +5,7 @@ import { AdminWorkspace } from '@/features/admin/components/AdminWorkspace';
 import { InstructorWorkspace } from '@/features/instructor/components/InstructorWorkspace';
 import { LearnerWorkspace } from '@/features/learner/components/LearnerWorkspace';
 import { PasanteWorkspace } from '@/features/pasante/components/PasanteWorkspace';
+// @ts-ignore: No declaration file for auth module
 import { cerrarSesion } from '@/services/auth';
 import { useAuth } from '@/hooks/useAuth';
 import type { AuthenticatedSession } from '@/features/workspace/types';
@@ -24,6 +25,8 @@ type DashboardAuthState = {
     fotoUrl?: string | null;
     identificacion?: string;
     programa?: string | null;
+    programaId?: string | null;
+    fichaId?: string | null;
     ficha?: string | null;
     fichasAsignadas?: string[];
     trimestreActual?: string | null;
@@ -106,8 +109,8 @@ export default function DashboardScreen() {
     role: profile.rol || 'Usuario autenticado',
     photoUrl: profile.fotoUrl || user.photoURL || null,
     identificacion: profile.identificacion || '',
-    programa: profile.programa || null,
-    ficha: profile.ficha || null,
+    programa: profile.programa || profile.programaId || null,
+    ficha: profile.ficha || profile.fichaId || null,
     fichasAsignadas: normalizeAssignedSheets(profile.fichasAsignadas),
     trimestreActual: profile.trimestreActual || null,
   };

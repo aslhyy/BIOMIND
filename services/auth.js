@@ -56,8 +56,10 @@ function buildUserProfile({
   uid,
   nombre,
   identificacion,
+  programaId,
   programa,
-  ficha,
+  fichaId = null,
+  ficha = null,
   rol,
   correo,
   fotoUrl,
@@ -67,7 +69,9 @@ function buildUserProfile({
     uid,
     nombre,
     identificacion,
+    programaId,
     programa,
+    fichaId,
     ficha,
     fichasAsignadas: [],
     rol,
@@ -154,7 +158,9 @@ async function restaurarPerfilAuthExistente(form, normalizedPrograma, normalized
       uid: cred.user.uid,
       nombre,
       identificacion,
+      programaId: normalizedProgramaId,
       programa: normalizedPrograma,
+      fichaId: null,
       ficha: normalizedFicha,
       rol: rolInicial,
       correo,
@@ -192,7 +198,8 @@ export async function registrar(form) {
     fotoPerfilBase64,
     fotoPerfilMimeType,
   } = form;
-  const normalizedPrograma = null;
+  const normalizedProgramaId = form.programaId || null;
+  const normalizedPrograma = form.programa || null;
   const normalizedFicha = null;
 
   let cred;
@@ -216,7 +223,9 @@ export async function registrar(form) {
       uid: cred.user.uid,
       nombre,
       identificacion,
+      programaId: normalizedProgramaId,
       programa: normalizedPrograma,
+      fichaId: null,
       ficha: normalizedFicha,
       rol: rolInicial,
       correo,

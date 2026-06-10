@@ -1,19 +1,23 @@
 import {
   addDoc,
+  arrayRemove,
+  arrayUnion,
   collection,
   doc,
   getDocs,
   onSnapshot,
   orderBy,
   query,
+  setDoc,
   updateDoc,
-  where
+  where,
 } from 'firebase/firestore';
 import { db } from './firebase';
 
 const PROGRAMAS_COLLECTION = 'programas';
 const FICHAS_COLLECTION = 'fichas';
 const TRIMESTRES_COLLECTION = 'trimestres';
+const USUARIOS_COLLECTION = 'usuarios';
 
 function now() {
   return new Date();
@@ -40,19 +44,21 @@ function mapSnapshot(snapshot) {
   }));
 }
 
+function isActive(record) {
+  return record.activo !== false && record.estado !== 'Inactivo' && record.estado !== 'Inactiva';
+}
+
 export function calcularTrimestreActual(trimestres, referenceDate = new Date()) {
   const today = new Date(referenceDate);
   today.setHours(0, 0, 0, 0);
 
-  const current = trimestres
-    .filter((trimester) => trimester.estado !== 'Inactivo')
+  return trimestres
+    .filter(isActive)
     .find((trimester) => {
       const start = new Date(`${trimester.fechaInicio}T00:00:00`);
       const end = new Date(`${trimester.fechaFin}T23:59:59`);
       return start <= today && today <= end;
-    });
-
-  return current || null;
+    }) || null;
 }
 
 export function escucharProgramas(onData, onError) {
@@ -79,6 +85,46 @@ export function escucharTrimestres(onData, onError) {
   );
 }
 
+export async function obtenerProgramas() {
+  const snapshot = await getDocs(query(collection(db, PROGRAMAS_COLLECTION), orderBy('nombre', 'asc')));
+  return mapSnapshot(snapshot).filter(isActive);
+}
+
+export async function obtenerFichasPorPrograma(programaId) {
+  if (!programaId) {
+    return [];
+  }
+
+  const snapshot = await getDocs(
+    query(collection(db, FICHAS_COLLECTION), where('programaId', '==', programaId))
+  );
+
+  return mapSnapshot(snapshot).filter(isActive);
+}
+
+export async function crearDatosAcademicosIniciales() {
+  await setDoc(doc(db, PROGRAMAS_COLLECTION, 'ADSO'), {
+    codigo: 'ADSO',
+    nombre: 'Analisis y Desarrollo de Software',
+    cantidadTrimestres: 4,
+    activo: true,
+    estado: 'Activo',
+    creadoEn: now(),
+    actualizadoEn: now(),
+  }, { merge: true });
+
+  await setDoc(doc(db, FICHAS_COLLECTION, '3203082'), {
+    numero: '3203082',
+    programaId: 'ADSO',
+    programaNombre: 'Analisis y Desarrollo de Software',
+    trimestreActual: 'IV trimestre',
+    activo: true,
+    estado: 'Activa',
+    creadoEn: now(),
+    actualizadoEn: now(),
+  }, { merge: true });
+}
+
 export async function guardarPrograma(programa) {
   const nombre = cleanText(programa.nombre);
   const codigo = cleanText(programa.codigo).toUpperCase();
@@ -92,6 +138,7 @@ export async function guardarPrograma(programa) {
     nombre,
     codigo,
     ...(typeof cantidadTrimestres === 'number' ? { cantidadTrimestres } : {}),
+    activo: programa.activo ?? true,
     estado: programa.estado || 'Activo',
     actualizadoEn: now(),
   };
@@ -109,6 +156,7 @@ export async function guardarPrograma(programa) {
 
 export async function desactivarPrograma(id) {
   await updateDoc(doc(db, PROGRAMAS_COLLECTION, id), {
+    activo: false,
     estado: 'Inactivo',
     actualizadoEn: now(),
   });
@@ -123,24 +171,23 @@ export async function guardarFicha(ficha) {
     throw new Error('Completa numero de ficha y programa.');
   }
 
-  // Validación: número único por programa
-  if (numero && programaId) {
-    const existingQuery = query(
-      collection(db, FICHAS_COLLECTION),
-      where('numero', '==', numero),
-      where('programaId', '==', programaId)
-    );
-    const existing = await getDocs(existingQuery);
-    const conflict = existing.docs.find((d) => d.id !== ficha.id);
-    if (conflict) {
-      throw new Error('Ya existe una ficha con ese número en el programa.');
-    }
+  const existingQuery = query(
+    collection(db, FICHAS_COLLECTION),
+    where('numero', '==', numero),
+    where('programaId', '==', programaId)
+  );
+  const existing = await getDocs(existingQuery);
+  const conflict = existing.docs.find((item) => item.id !== ficha.id);
+
+  if (conflict) {
+    throw new Error('Ya existe una ficha con ese numero en el programa.');
   }
 
   const payload = {
     numero,
     programaId,
     programaNombre,
+    activo: ficha.activo ?? true,
     estado: ficha.estado || 'Activa',
     actualizadoEn: now(),
   };
@@ -158,6 +205,7 @@ export async function guardarFicha(ficha) {
 
 export async function desactivarFicha(id) {
   await updateDoc(doc(db, FICHAS_COLLECTION, id), {
+    activo: false,
     estado: 'Inactiva',
     actualizadoEn: now(),
   });
@@ -188,6 +236,7 @@ export async function guardarTrimestre(trimestre) {
     programaNombre,
     fichaId,
     fichaNumero,
+    activo: trimestre.activo ?? true,
     estado: trimestre.estado || 'Activo',
     actualizadoEn: now(),
   };
@@ -205,18 +254,46 @@ export async function guardarTrimestre(trimestre) {
 
 export async function desactivarTrimestre(id) {
   await updateDoc(doc(db, TRIMESTRES_COLLECTION, id), {
+    activo: false,
     estado: 'Inactivo',
     actualizadoEn: now(),
   });
 }
 
-// Asignaciones: instructores <-> fichas
+export async function asignarAprendizAFicha({ aprendiz, ficha }) {
+  if (!aprendiz?.id) {
+    throw new Error('Selecciona un aprendiz valido.');
+  }
+
+  if (!ficha?.id) {
+    throw new Error('Selecciona una ficha valida.');
+  }
+
+  if (aprendiz.fichaId) {
+    throw new Error('Este aprendiz ya tiene una ficha asignada.');
+  }
+
+  if (!aprendiz.programaId) {
+    throw new Error('El aprendiz no tiene programa seleccionado.');
+  }
+
+  if (ficha.programaId !== aprendiz.programaId) {
+    throw new Error('La ficha no pertenece al programa seleccionado por el aprendiz.');
+  }
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, aprendiz.id), {
+    fichaId: ficha.id,
+    ficha: ficha.numero || ficha.id,
+    trimestreActual: ficha.trimestreActual || null,
+    actualizadoEn: now(),
+  });
+}
+
 export async function assignInstructorToFicha(instructorUid, fichaId) {
   if (!instructorUid || !fichaId) {
     throw new Error('Instructor y ficha son requeridos.');
   }
 
-  // Añade el instructor al arreglo `instructorUids` de la ficha
   await updateDoc(doc(db, FICHAS_COLLECTION, fichaId), {
     instructorUids: arrayUnion(instructorUid),
     actualizadoEn: now(),
@@ -246,19 +323,16 @@ export function subscribeInstructorFichas(instructorUid, onData, onError) {
   );
 }
 
-// Asignaciones: pasantes <-> fichas
 export async function assignPasanteToFicha(pasanteUid, fichaId) {
   if (!pasanteUid || !fichaId) {
     throw new Error('Pasante y ficha son requeridos.');
   }
 
-  // Actualiza la lista de fichas asignadas en el usuario
-  await updateDoc(doc(db, 'usuarios', pasanteUid), {
+  await updateDoc(doc(db, USUARIOS_COLLECTION, pasanteUid), {
     fichasAsignadas: arrayUnion(fichaId),
     actualizadoEn: now(),
   });
 
-  // Actualiza la lista de pasantes en la ficha
   await updateDoc(doc(db, FICHAS_COLLECTION, fichaId), {
     pasantesUids: arrayUnion(pasanteUid),
     actualizadoEn: now(),
@@ -270,7 +344,7 @@ export async function removePasanteFromFicha(pasanteUid, fichaId) {
     throw new Error('Pasante y ficha son requeridos.');
   }
 
-  await updateDoc(doc(db, 'usuarios', pasanteUid), {
+  await updateDoc(doc(db, USUARIOS_COLLECTION, pasanteUid), {
     fichasAsignadas: arrayRemove(fichaId),
     actualizadoEn: now(),
   });
@@ -293,39 +367,26 @@ export function subscribePasanteFichas(pasanteUid, onData, onError) {
   );
 }
 
-// Asigna un pasante a un instructor y hereda las fichas del instructor al pasante
 export async function assignPasanteToInstructor(instructorUid, pasanteUid) {
   if (!instructorUid || !pasanteUid) {
     throw new Error('Instructor y pasante son requeridos.');
   }
 
-  // Primero obtener fichas del instructor
   const fichasQuery = query(collection(db, FICHAS_COLLECTION), where('instructorUids', 'array-contains', instructorUid));
   const snapshot = await getDocs(fichasQuery);
-  const fichaIds = snapshot.docs.map((d) => d.id);
-
-  // Actualiza el usuario pasante con instructorUid y las fichas heredadas
-  const pasanteRef = doc(db, 'usuarios', pasanteUid);
+  const fichaIds = snapshot.docs.map((item) => item.id);
   const updates = { instructorUid, actualizadoEn: now() };
 
   if (fichaIds.length) {
-    // añadir todas las fichas al arreglo fichasAsignadas
     updates.fichasAsignadas = arrayUnion(...fichaIds);
   }
 
-  await updateDoc(pasanteRef, updates);
+  await updateDoc(doc(db, USUARIOS_COLLECTION, pasanteUid), updates);
+  await updateDoc(doc(db, USUARIOS_COLLECTION, instructorUid), {
+    pasantesUids: arrayUnion(pasanteUid),
+    actualizadoEn: now(),
+  });
 
-  // Añadir pasante al listado de pasantes del instructor (si existe documento instructor)
-  try {
-    await updateDoc(doc(db, 'usuarios', instructorUid), {
-      pasantesUids: arrayUnion(pasanteUid),
-      actualizadoEn: now(),
-    });
-  } catch (err) {
-    // Si falla (por ejemplo no existe el doc del instructor), no interrumpe
-  }
-
-  // Actualizar cada ficha para incluir al pasante en pasantesUids
   for (const fichaId of fichaIds) {
     await updateDoc(doc(db, FICHAS_COLLECTION, fichaId), {
       pasantesUids: arrayUnion(pasanteUid),
