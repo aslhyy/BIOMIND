@@ -20,9 +20,9 @@ import { asignarRolUsuario, escucharUsuariosAdmin } from '@/services/adminUsers'
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import type { ComponentProps, ReactNode } from 'react';
+import { createElement, type ComponentProps, type ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type AdminTab = 'inicio' | 'usuarios' | 'academico' | 'trimestres' | 'perfil';
@@ -768,8 +768,8 @@ function TrimesterTab({
         {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
         <View style={styles.formCard}>
           <AdminField label="Numero" keyboardType="numeric" value={form.numero} onChangeText={(numero) => setForm((current) => ({ ...current, numero }))} />
-          <AdminField label="Fecha inicio (AAAA-MM-DD)" value={form.fechaInicio} onChangeText={(fechaInicio) => setForm((current) => ({ ...current, fechaInicio }))} />
-          <AdminField label="Fecha fin (AAAA-MM-DD)" value={form.fechaFin} onChangeText={(fechaFin) => setForm((current) => ({ ...current, fechaFin }))} />
+          <DateField label="Fecha inicio" value={form.fechaInicio} onChange={(fechaInicio) => setForm((current) => ({ ...current, fechaInicio }))} />
+          <DateField label="Fecha fin" value={form.fechaFin} onChange={(fechaFin) => setForm((current) => ({ ...current, fechaFin }))} />
           <OptionPicker
             emptyLabel="Primero crea un programa"
             options={activePrograms.map((program) => ({ label: `${program.codigo || 'Programa'} - ${program.nombre || ''}`, value: program.id }))}
@@ -1216,6 +1216,56 @@ function AdminField({
       <TextInput
         keyboardType={keyboardType}
         onChangeText={onChangeText}
+        placeholderTextColor={palette.muted}
+        style={styles.profileInput}
+        value={value}
+      />
+    </View>
+  );
+}
+
+function DateField({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.adminField}>
+        <Text style={styles.profileFieldLabel}>{label}</Text>
+        {createElement('input', {
+          'aria-label': label,
+          type: 'date',
+          value,
+          onChange: (event: { target: { value: string } }) => onChange(event.target.value),
+          style: {
+            backgroundColor: palette.surface,
+            border: '1px solid #CFCFCF',
+            borderRadius: 999,
+            color: palette.ink,
+            fontFamily: 'PoppinsRegular',
+            fontSize: 12,
+            height: 36,
+            outlineColor: palette.primary,
+            padding: '7px 16px',
+            width: '100%',
+          },
+        })}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.adminField}>
+      <Text style={styles.profileFieldLabel}>{label}</Text>
+      <TextInput
+        inputMode="numeric"
+        onChangeText={onChange}
+        placeholder="AAAA-MM-DD"
         placeholderTextColor={palette.muted}
         style={styles.profileInput}
         value={value}

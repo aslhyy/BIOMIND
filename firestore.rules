@@ -1,15 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /programas/{programaId} {
-    allow read: if request.auth != null;
-    allow write: if isAdmin();
-    }
-
-    match /fichas/{fichaId} {
-    allow read: if request.auth != null;
-    allow write: if isAdmin();
-    }
     function isAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
@@ -18,6 +9,12 @@ service cloud.firestore {
 
     function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
+    }
+
+    // Reglas abiertas temporalmente para pruebas integrales de Fase 10.
+    // Permiten validar CRUD, asignaciones y trimestres con cualquier usuario autenticado.
+    match /{document=**} {
+      allow read, write: if request.auth != null;
     }
 
     match /usuarios/{userId} {
