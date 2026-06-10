@@ -1,4 +1,4 @@
-import { collection, doc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
 
 const USUARIOS_COLLECTION = 'usuarios';
@@ -35,4 +35,23 @@ export async function asignarRolUsuario(uid, rol) {
     rol: normalizedRole,
     actualizadoEn: new Date(),
   });
+}
+
+export async function suspenderUsuarioAdmin(uid) {
+  if (!uid) {
+    throw new Error('Selecciona un usuario para suspender.');
+  }
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, uid), {
+    estado: 'suspendido',
+    actualizadoEn: new Date(),
+  });
+}
+
+export async function eliminarUsuarioAdmin(uid) {
+  if (!uid) {
+    throw new Error('Selecciona un usuario para eliminar.');
+  }
+
+  await deleteDoc(doc(db, USUARIOS_COLLECTION, uid));
 }

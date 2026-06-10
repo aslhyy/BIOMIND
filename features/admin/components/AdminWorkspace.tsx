@@ -4,7 +4,6 @@ import type { AuthenticatedSession } from '@/features/workspace/types';
 import {
   asignarAprendizAFicha,
   calcularTrimestreActual,
-  crearDatosAcademicosIniciales,
   desactivarFicha,
   desactivarPrograma,
   desactivarTrimestre,
@@ -16,7 +15,7 @@ import {
   guardarTrimestre,
   obtenerFichasPorPrograma,
 } from '@/services/academic';
-import { asignarRolUsuario, escucharUsuariosAdmin } from '@/services/adminUsers';
+import { asignarRolUsuario, eliminarUsuarioAdmin, escucharUsuariosAdmin, suspenderUsuarioAdmin } from '@/services/adminUsers';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -252,15 +251,6 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
   if (!fontsLoaded) {
     return null;
   }
-  const handleCrearDatosAcademicos = async () => {
-    try {
-      await crearDatosAcademicosIniciales();
-      setAcademicError('');
-    } catch (error: any) {
-      setAcademicError(error?.message || 'No pudimos crear los datos academicos.');
-    }
-  };
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -285,7 +275,6 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
             <AcademicTab
               error={academicError}
               loading={academicLoading}
-              onCrearDatosAcademicos={handleCrearDatosAcademicos}
               programs={programs.length ? programs : demoPrograms}
               sheets={sheets.length ? sheets : demoAcademicSheets}
             />
@@ -479,6 +468,22 @@ function UsersTab({
                 selectedRole={selectedRole}
                 user={user}
                 onAssignRole={onAssignRole}
+                onDelete={async () => {
+                  try {
+                    await eliminarUsuarioAdmin(user.id);
+                    alert('Usuario eliminado correctamente.');
+                  } catch (error: any) {
+                    alert(error?.message || 'No pudimos eliminar el usuario.');
+                  }
+                }}
+                onSuspend={async () => {
+                  try {
+                    await suspenderUsuarioAdmin(user.id);
+                    alert('Usuario suspendido correctamente.');
+                  } catch (error: any) {
+                    alert(error?.message || 'No pudimos suspender el usuario.');
+                  }
+                }}
               />
 
               {String(user.rol || '').toLowerCase() === 'aprendiz' && !user.fichaId ? (
@@ -537,13 +542,11 @@ function UsersTab({
 function AcademicTab({
   error,
   loading,
-  onCrearDatosAcademicos,
   programs,
   sheets,
 }: {
   error: string;
   loading: boolean;
-  onCrearDatosAcademicos: () => void;
   programs: AcademicProgram[];
   sheets: AcademicSheet[];
 }) {
@@ -608,17 +611,6 @@ function AcademicTab({
         subtitle="Gestion de fichas, asignaciones, competencias, RAP, proyectos y grupos"
         title="Academico"
       />
-
-      <Section
-        title="Datos académicos iniciales"
-        subtitle="Crear programa y ficha base para el registro de aprendices"
-      >
-        <Pressable style={styles.primaryActionButton} onPress={onCrearDatosAcademicos}>
-          <MaterialCommunityIcons name="database-plus-outline" size={18} color="#FFFFFF" />
-          <Text style={styles.primaryActionButtonText}>Crear programa ADSO y ficha 3203082</Text>
-        </Pressable>
-      </Section>
-
       <Section title="Programas" subtitle="Crear, listar, editar y desactivar programas">
         {error ? <FeedbackBox icon="alert-circle-outline" text={error} tone="error" /> : null}
         {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
@@ -675,10 +667,10 @@ function AcademicTab({
       </Section>
 
       <Section title="Asignaciones" subtitle="Vinculos entre fichas, aprendices, instructores y pasantes">
-        <ActionRow icon="account-multiple-plus-outline" text="Asociar aprendices a ficha, competencia o RAP" />
-        <ActionRow icon="account-school-outline" text="Asignar instructores a una o varias fichas" />
-        <ActionRow icon="account-tie-outline" text="Asignar pasantes a instructores y fichas" />
-        <ActionRow icon="briefcase-check-outline" text="Asignar proyectos a aprendices o grupos de trabajo" />
+        <ActionRow icon="account-multiple-plus-outline" text="Asociar aprendices a ficha, competencia o RAP" onPress={() => setFeedback('Para aprendices: usa el boton de asignar ficha en Gestion de usuarios.')} />
+        <ActionRow icon="account-school-outline" text="Asignar instructores a una o varias fichas" onPress={() => setFeedback('Asignacion de instructores lista en servicio academico; falta seleccionar instructor en esta pantalla.')} />
+        <ActionRow icon="account-tie-outline" text="Asignar pasantes a instructores y fichas" onPress={() => setFeedback('Asignacion de pasantes lista en servicio academico; falta seleccionar pasante e instructor en esta pantalla.')} />
+        <ActionRow icon="briefcase-check-outline" text="Asignar proyectos a aprendices o grupos de trabajo" onPress={() => setFeedback('Proyectos queda preparado para la siguiente fase funcional.')} />
       </Section>
     </>
   );
@@ -830,9 +822,9 @@ function TrimesterTab({
       </Section>
 
       <Section title="Actualizacion automatica" subtitle="Aplicar el trimestre en perfiles y reportes academicos">
-        <ActionRow icon="calendar-plus-outline" text="Configurar fecha de inicio de ficha" />
-        <ActionRow icon="autorenew" text="Actualizar trimestre visible para aprendices, instructores y pasantes" />
-        <ActionRow icon="bell-check-outline" text="Preparar alertas cuando una ficha cambie de trimestre" />
+        <ActionRow icon="calendar-plus-outline" text="Configurar fecha de inicio de ficha" onPress={() => setFeedback('Usa el formulario de Crear trimestre para registrar inicio y fin.')} />
+        <ActionRow icon="autorenew" text="Actualizar trimestre visible para aprendices, instructores y pasantes" onPress={() => setFeedback('El trimestre actual se calcula automaticamente segun las fechas configuradas.')} />
+        <ActionRow icon="bell-check-outline" text="Preparar alertas cuando una ficha cambie de trimestre" onPress={() => setFeedback('Alertas preparadas como flujo; las notificaciones se conectan en una fase posterior.')} />
       </Section>
     </>
   );
@@ -845,7 +837,7 @@ function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
         <View style={styles.adminProfilePanel}>
           <View style={styles.adminAvatarWrap}>
             <UserAvatar name={session.name} photoUrl={session.photoUrl} size={104} />
-            <Pressable style={styles.changePhotoButton}>
+            <Pressable style={styles.changePhotoButton} onPress={() => alert('Cambio de foto disponible desde los perfiles de usuario. En admin queda preparado visualmente.')}>
               <Text style={styles.changePhotoText}>Cambiar foto</Text>
             </Pressable>
           </View>
@@ -856,7 +848,7 @@ function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
           </View>
 
           <View style={styles.profileButtonRow}>
-            <Pressable style={styles.saveProfileButton}>
+            <Pressable style={styles.saveProfileButton} onPress={() => alert('Perfil de administrador listo. Los datos vienen de la sesion actual.')}>
               <Text style={styles.saveProfileText}>Guardar Perfil</Text>
             </Pressable>
             <Pressable onPress={onSignOut} style={styles.signOutButton}>
@@ -937,12 +929,16 @@ function QuickAction({
 
 function UserRow({
   assigning,
+  onDelete,
   onAssignRole,
+  onSuspend,
   selectedRole,
   user,
 }: {
   assigning: boolean;
+  onDelete: () => void;
   onAssignRole: (uid: string, role: string) => void;
+  onSuspend: () => void;
   selectedRole: string;
   user: AdminUser;
 }) {
@@ -979,10 +975,10 @@ function UserRow({
           )}
         </Pressable>
         <View style={styles.userRoundActions}>
-          <Pressable accessibilityLabel="Suspender usuario" style={styles.iconButton}>
+          <Pressable accessibilityLabel="Suspender usuario" onPress={onSuspend} style={styles.iconButton}>
             <MaterialCommunityIcons name="account-minus-outline" size={22} color={palette.salmonText} />
           </Pressable>
-          <Pressable accessibilityLabel="Eliminar usuario" style={styles.iconButton}>
+          <Pressable accessibilityLabel="Eliminar usuario" onPress={onDelete} style={styles.iconButton}>
             <MaterialCommunityIcons name="account-remove-outline" size={22} color={palette.salmonText} />
           </Pressable>
         </View>
@@ -1460,13 +1456,13 @@ function Section({ children, subtitle, title }: { children: ReactNode; subtitle:
   );
 }
 
-function ActionRow({ icon, text }: { icon: AdminIconName; text: string }) {
+function ActionRow({ icon, onPress, text }: { icon: AdminIconName; onPress?: () => void; text: string }) {
   return (
-    <View style={styles.actionRow}>
+    <Pressable disabled={!onPress} onPress={onPress} style={styles.actionRow}>
       <MaterialCommunityIcons name={icon} size={20} color={palette.primary} />
       <Text style={styles.actionText}>{text}</Text>
       <MaterialCommunityIcons name="chevron-right" size={20} color={palette.muted} />
-    </View>
+    </Pressable>
   );
 }
 
@@ -2396,21 +2392,6 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
   },
-  primaryActionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    borderRadius: 999,
-    backgroundColor: palette.primary,
-  },
-
-  primaryActionButtonText: {
-    color: '#FFFFFF',
-    fontFamily: 'PoppinsSemiBold',
-    fontSize: 12,
-  },
 });
+
 
