@@ -20,9 +20,9 @@ import { asignarRolUsuario, escucharUsuariosAdmin } from '@/services/adminUsers'
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import { createElement, type ComponentProps, type ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type AdminTab = 'inicio' | 'usuarios' | 'academico' | 'trimestres' | 'perfil';
@@ -548,16 +548,17 @@ function AcademicTab({
   sheets: AcademicSheet[];
 }) {
   const activePrograms = programs.filter((program) => program.estado !== 'Inactivo');
+  const firstProgramId = activePrograms[0]?.id || '';
   const [programForm, setProgramForm] = useState({ id: '', codigo: '', nombre: '' });
-  const [sheetForm, setSheetForm] = useState({ id: '', numero: '', programaId: activePrograms[0]?.id || '' });
+  const [sheetForm, setSheetForm] = useState({ id: '', numero: '', programaId: firstProgramId });
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
 
   useEffect(() => {
-    if (!sheetForm.programaId && activePrograms[0]?.id) {
-      setSheetForm((current) => ({ ...current, programaId: activePrograms[0].id }));
+    if (!sheetForm.programaId && firstProgramId) {
+      setSheetForm((current) => ({ ...current, programaId: firstProgramId }));
     }
-  }, [activePrograms, sheetForm.programaId]);
+  }, [firstProgramId, sheetForm.programaId]);
 
   const selectedProgram = activePrograms.find((program) => program.id === sheetForm.programaId) || activePrograms[0];
   const canSaveSheet = Boolean(selectedProgram) && !isDemoRecord(selectedProgram?.id);
@@ -698,25 +699,36 @@ function TrimesterTab({
 }) {
   const activePrograms = programs.filter((program) => program.estado !== 'Inactivo');
   const activeSheets = sheets.filter((sheet) => sheet.estado !== 'Inactiva');
+  const firstProgramId = activePrograms[0]?.id || '';
+  const firstSheetId = activeSheets[0]?.id || '';
   const [form, setForm] = useState({
     id: '',
     numero: '1',
     fechaInicio: '',
     fechaFin: '',
-    programaId: activePrograms[0]?.id || '',
-    fichaId: activeSheets[0]?.id || '',
+    programaId: firstProgramId,
+    fichaId: firstSheetId,
   });
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const currentTrimester = calcularTrimestreActual(trimesters);
 
   useEffect(() => {
-    setForm((current) => ({
-      ...current,
-      programaId: current.programaId || activePrograms[0]?.id || '',
-      fichaId: current.fichaId || activeSheets[0]?.id || '',
-    }));
-  }, [activePrograms, activeSheets]);
+    setForm((current) => {
+      const nextProgramId = current.programaId || firstProgramId;
+      const nextSheetId = current.fichaId || firstSheetId;
+
+      if (nextProgramId === current.programaId && nextSheetId === current.fichaId) {
+        return current;
+      }
+
+      return {
+        ...current,
+        programaId: nextProgramId,
+        fichaId: nextSheetId,
+      };
+    });
+  }, [firstProgramId, firstSheetId]);
 
   const selectedProgram = activePrograms.find((program) => program.id === form.programaId) || activePrograms[0];
   const selectedSheet = activeSheets.find((sheet) => sheet.id === form.fichaId) || activeSheets[0];
@@ -1233,45 +1245,97 @@ function DateField({
   onChange: (value: string) => void;
   value: string;
 }) {
-  if (Platform.OS === 'web') {
-    return (
-      <View style={styles.adminField}>
-        <Text style={styles.profileFieldLabel}>{label}</Text>
-        {createElement('input', {
-          'aria-label': label,
-          type: 'date',
-          value,
-          onChange: (event: { target: { value: string } }) => onChange(event.target.value),
-          style: {
-            backgroundColor: palette.surface,
-            border: '1px solid #CFCFCF',
-            borderRadius: 999,
-            color: palette.ink,
-            fontFamily: 'PoppinsRegular',
-            fontSize: 12,
-            height: 36,
-            outlineColor: palette.primary,
-            padding: '7px 16px',
-            width: '100%',
-          },
-        })}
-      </View>
-    );
-  }
+  const [open, setOpen] = useState(false);
+  const selectedDate = parseDateValue(value);
+  const [visibleMonth, setVisibleMonth] = useState(
+    selectedDate || new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  );
+  const year = visibleMonth.getFullYear();
+  const month = visibleMonth.getMonth();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const calendarCells = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, index) => index + 1),
+  ];
+
+  const moveMonth = (offset: number) => {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+  };
 
   return (
     <View style={styles.adminField}>
       <Text style={styles.profileFieldLabel}>{label}</Text>
-      <TextInput
-        inputMode="numeric"
-        onChangeText={onChange}
-        placeholder="AAAA-MM-DD"
-        placeholderTextColor={palette.muted}
-        style={styles.profileInput}
-        value={value}
-      />
+      <Pressable onPress={() => setOpen((current) => !current)} style={styles.dateInputButton}>
+        <MaterialCommunityIcons name="calendar-month-outline" size={18} color={palette.primary} />
+        <Text style={[styles.dateInputText, !value && styles.dateInputPlaceholder]}>
+          {value || 'Seleccionar fecha'}
+        </Text>
+      </Pressable>
+      {open ? (
+        <View style={styles.calendarCard}>
+          <View style={styles.calendarHeader}>
+            <Pressable onPress={() => moveMonth(-1)} style={styles.calendarNavButton}>
+              <MaterialCommunityIcons name="chevron-left" size={20} color={palette.primary} />
+            </Pressable>
+            <Text style={styles.calendarTitle}>
+              {getMonthLabel(visibleMonth)}
+            </Text>
+            <Pressable onPress={() => moveMonth(1)} style={styles.calendarNavButton}>
+              <MaterialCommunityIcons name="chevron-right" size={20} color={palette.primary} />
+            </Pressable>
+          </View>
+          <View style={styles.weekRow}>
+            {['D', 'L', 'M', 'M', 'J', 'V', 'S'].map((day, index) => (
+              <Text key={`${day}-${index}`} style={styles.weekDayText}>{day}</Text>
+            ))}
+          </View>
+          <View style={styles.calendarGrid}>
+            {calendarCells.map((day, index) => {
+              const dateValue = day ? formatDateValue(new Date(year, month, day)) : '';
+              const isSelected = Boolean(day && dateValue === value);
+
+              return (
+                <Pressable
+                  disabled={!day}
+                  key={`${day || 'empty'}-${index}`}
+                  onPress={() => {
+                    onChange(dateValue);
+                    setOpen(false);
+                  }}
+                  style={[styles.calendarDay, isSelected && styles.calendarDaySelected]}>
+                  <Text style={[styles.calendarDayText, isSelected && styles.calendarDayTextSelected]}>
+                    {day || ''}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
     </View>
   );
+}
+
+function parseDateValue(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatDateValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getMonthLabel(date: Date) {
+  const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  return `${months[date.getMonth()]} ${date.getFullYear()}`;
 }
 
 function OptionPicker({
@@ -1972,6 +2036,85 @@ const styles = StyleSheet.create({
     color: palette.surface,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
+  },
+  dateInputButton: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderColor: '#CFCFCF',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 38,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  dateInputText: {
+    color: palette.ink,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+  },
+  dateInputPlaceholder: {
+    color: palette.muted,
+  },
+  calendarCard: {
+    backgroundColor: palette.surface,
+    borderColor: palette.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    padding: 12,
+  },
+  calendarHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  calendarNavButton: {
+    alignItems: 'center',
+    backgroundColor: palette.soft,
+    borderRadius: 999,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  calendarTitle: {
+    color: palette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  weekRow: {
+    flexDirection: 'row',
+  },
+  weekDayText: {
+    color: palette.primary,
+    flex: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    textAlign: 'center',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarDay: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 34,
+    justifyContent: 'center',
+    width: `${100 / 7}%`,
+  },
+  calendarDaySelected: {
+    backgroundColor: palette.primary,
+  },
+  calendarDayText: {
+    color: palette.ink,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 12,
+  },
+  calendarDayTextSelected: {
+    color: palette.surface,
   },
   optionWrap: {
     flexDirection: 'row',
