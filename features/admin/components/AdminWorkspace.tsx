@@ -9,6 +9,8 @@ import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import { asignarRolUsuario, escucharUsuariosAdmin } from '@/services/adminUsers';
+import { asignarAprendizAFicha, obtenerFichasPorPrograma, } from '@/services/academic';
+import { crearDatosAcademicosIniciales } from '@/services/academic';
 
 type AdminTab = 'inicio' | 'usuarios' | 'academico' | 'trimestres' | 'perfil';
 type AdminIconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
@@ -59,7 +61,12 @@ type AdminUser = {
   correo?: string;
   identificacion?: string;
   rol?: string | null;
-  correoVerificado?: boolean;
+  correoVerificado?: boolean,
+  programaId?: string | null;
+  programa?: string | null;
+  fichaId?: string | null;
+  ficha?: string | null;
+  trimestreActual?: string | null;
 };
 
 const formationSheets = [
@@ -167,6 +174,15 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
       }
     );
 
+    const handleCrearDatosAcademicos = async () => {
+      try {
+        await crearDatosAcademicosIniciales();
+        setUsersError('Programa y ficha creados correctamente.');
+      } catch (error: any) {
+        setUsersError(error?.message || 'No pudimos crear los datos académicos.');
+      }
+    };
+
     return unsubscribe;
   }, []);
 
@@ -185,6 +201,10 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
 
   if (!fontsLoaded) {
     return null;
+  }
+
+  function handleCrearDatosAcademicos(): void {
+    throw new Error('Function not implemented.');
   }
 
   return (
@@ -207,7 +227,9 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
               onRoleChange={setSelectedRole}
             />
           )}
-          {activeTab === 'academico' && <AcademicTab />}
+          {activeTab === 'academico' && (
+            <AcademicTab onCrearDatosAcademicos={handleCrearDatosAcademicos} />
+          )}
           {activeTab === 'trimestres' && <TrimesterTab />}
           {activeTab === 'perfil' && <ProfileTab session={session} onSignOut={onSignOut} />}
         </ScrollView>
@@ -383,13 +405,40 @@ function UsersTab({
           </View>
         ) : verifiedUsers.length ? (
           verifiedUsers.map((user) => (
-            <UserRow
-              assigning={assigningUid === user.id}
-              key={user.id}
-              selectedRole={selectedRole}
-              user={user}
-              onAssignRole={onAssignRole}
-            />
+            <View key={user.id}>
+              <UserRow
+                assigning={assigningUid === user.id}
+                selectedRole={selectedRole}
+                user={user}
+                onAssignRole={onAssignRole}
+              />
+
+              {String(user.rol || '').toLowerCase() === 'aprendiz' && !user.fichaId ? (
+                <Pressable
+                  style={styles.assignButton}
+                  onPress={async () => {
+                    try {
+                      const fichas = await obtenerFichasPorPrograma(user.programaId);
+
+                      if (!fichas.length) {
+                        alert('No hay fichas para el programa de este aprendiz.');
+                        return;
+                      }
+
+                      await asignarAprendizAFicha({
+                        aprendiz: user,
+                        ficha: fichas[0],
+                      });
+
+                      alert('Ficha asignada correctamente.');
+                    } catch (error: any) {
+                      alert(error?.message || 'No pudimos asignar la ficha.');
+                    }
+                  }}>
+                  <Text style={styles.assignButtonText}>Asignar primera ficha disponible</Text>
+                </Pressable>
+              ) : null}
+            </View>
           ))
         ) : (
           <FeedbackBox
@@ -417,7 +466,11 @@ function UsersTab({
   );
 }
 
-function AcademicTab() {
+function AcademicTab({
+  onCrearDatosAcademicos,
+}: {
+  onCrearDatosAcademicos: () => void;
+}) {
   return (
     <>
       <PageTitle
@@ -425,6 +478,16 @@ function AcademicTab() {
         subtitle="Gestion de fichas, asignaciones, competencias, RAP, proyectos y grupos"
         title="Academico"
       />
+
+      <Section
+        title="Datos académicos iniciales"
+        subtitle="Crear programa y ficha base para el registro de aprendices"
+      >
+        <Pressable style={styles.primaryActionButton} onPress={onCrearDatosAcademicos}>
+          <MaterialCommunityIcons name="database-plus-outline" size={18} color="#FFFFFF" />
+          <Text style={styles.primaryActionButtonText}>Crear programa ADSO y ficha 3203082</Text>
+        </Pressable>
+      </Section>
 
       <Section title="Fichas de formacion" subtitle="Crear, consultar, editar, desactivar y asignar responsables">
         {formationSheets.map((sheet) => (
@@ -1538,6 +1601,35 @@ const styles = StyleSheet.create({
   },
   signOutText: {
     color: palette.danger,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  assignButton: {
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: palette.mint,
+    alignSelf: 'flex-start',
+  },
+  assignButtonText: {
+    color: palette.mintText,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  primaryActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderRadius: 999,
+    backgroundColor: palette.primary,
+  },
+
+  primaryActionButtonText: {
+    color: '#FFFFFF',
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
   },
