@@ -66,7 +66,7 @@ export function LoginForm({
 
   const handleLogin = async () => {
     const correo = getNormalizedEmail();
-    const contrasena = form.contrasena.trim();
+    const contrasena = form.contrasena;
 
     if (!correo || !contrasena) {
       showAlert({
@@ -89,12 +89,14 @@ export function LoginForm({
     setLoading(true);
 
     try {
-      await iniciarSesion(correo, contrasena);
-      showAlert({
-        variant: 'success',
-        title: 'Bienvenido',
-        message: 'Tu inicio de sesión fue exitoso.',
-      });
+      const session = await iniciarSesion(correo, contrasena);
+      if (String(session?.profile?.rol || '').trim()) {
+        showAlert({
+          variant: 'success',
+          title: 'Bienvenido',
+          message: 'Tu inicio de sesión fue exitoso.',
+        });
+      }
       onAuthenticated();
     } catch (error: any) {
       if (error?.code === 'auth/email-not-verified') {

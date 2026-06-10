@@ -11,6 +11,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -18,6 +19,9 @@ const PROGRAMAS_COLLECTION = 'programas';
 const FICHAS_COLLECTION = 'fichas';
 const TRIMESTRES_COLLECTION = 'trimestres';
 const USUARIOS_COLLECTION = 'usuarios';
+const COMPETENCIAS_COLLECTION = 'competencias';
+const RESULTADOS_COLLECTION = 'resultadosAprendizaje';
+const ASIGNACIONES_COMPETENCIAS_COLLECTION = 'asignacionesCompetencias';
 
 function now() {
   return new Date();
@@ -83,6 +87,99 @@ export function escucharTrimestres(onData, onError) {
     (snapshot) => onData(mapSnapshot(snapshot)),
     onError
   );
+}
+
+export function escucharCompetencias(onData, onError) {
+  return onSnapshot(
+    query(collection(db, COMPETENCIAS_COLLECTION), orderBy('creadoEn', 'desc')),
+    (snapshot) => onData(mapSnapshot(snapshot)),
+    onError
+  );
+}
+
+export function escucharResultadosAprendizaje(onData, onError) {
+  return onSnapshot(
+    query(collection(db, RESULTADOS_COLLECTION), orderBy('creadoEn', 'desc')),
+    (snapshot) => onData(mapSnapshot(snapshot)),
+    onError
+  );
+}
+
+export function escucharAsignacionesCompetencias(onData, onError) {
+  return onSnapshot(
+    query(collection(db, ASIGNACIONES_COMPETENCIAS_COLLECTION), orderBy('creadoEn', 'desc')),
+    (snapshot) => onData(mapSnapshot(snapshot)),
+    onError
+  );
+}
+
+export function escucharContextoAcademicoUsuario(session, onData, onError) {
+  const state = {
+    fichas: [],
+    usuarios: [],
+    competencias: [],
+    resultados: [],
+    asignaciones: [],
+  };
+
+  const emit = () => {
+    const role = cleanText(session?.role).toLowerCase();
+    const assignedIds = new Set((session?.fichasAsignadas || []).map(String));
+
+    const fichas = state.fichas.filter((ficha) => {
+      if (role === 'aprendiz') {
+        return ficha.id === session?.fichaId || ficha.numero === session?.ficha;
+      }
+
+      if (role === 'instructor') {
+        return assignedIds.has(ficha.id) || (ficha.instructorUids || []).includes(session?.uid);
+      }
+
+      if (role === 'pasante') {
+        return assignedIds.has(ficha.id) || (ficha.pasantesUids || []).includes(session?.uid);
+      }
+
+      return false;
+    });
+    const fichaIds = new Set(fichas.map((ficha) => ficha.id));
+    const asignaciones = state.asignaciones.filter((assignment) => fichaIds.has(assignment.fichaId) && isActive(assignment));
+    const competenciaIds = new Set(asignaciones.map((assignment) => assignment.competenciaId));
+    const instructorIds = new Set(asignaciones.map((assignment) => assignment.instructorUid));
+    fichas.forEach((ficha) => (ficha.instructorUids || []).forEach((uid) => instructorIds.add(uid)));
+    if (session?.instructorUid) {
+      instructorIds.add(session.instructorUid);
+    }
+
+    onData({
+      fichas,
+      asignaciones,
+      competencias: state.competencias.filter((competencia) => competenciaIds.has(competencia.id) && isActive(competencia)),
+      resultados: state.resultados.filter((resultado) => competenciaIds.has(resultado.competenciaId) && isActive(resultado)),
+      instructores: state.usuarios.filter((user) => instructorIds.has(user.id)),
+      aprendices: state.usuarios.filter((user) => fichaIds.has(user.fichaId) && cleanText(user.rol).toLowerCase() === 'aprendiz'),
+      pasantes: state.usuarios.filter((user) => user.instructorUid === session?.uid && cleanText(user.rol).toLowerCase() === 'pasante'),
+    });
+  };
+
+  const subscribe = (collectionName, stateKey) =>
+    onSnapshot(
+      collection(db, collectionName),
+      (snapshot) => {
+        state[stateKey] = mapSnapshot(snapshot);
+        emit();
+      },
+      onError
+    );
+
+  const unsubscribers = [
+    subscribe(FICHAS_COLLECTION, 'fichas'),
+    subscribe(USUARIOS_COLLECTION, 'usuarios'),
+    subscribe(COMPETENCIAS_COLLECTION, 'competencias'),
+    subscribe(RESULTADOS_COLLECTION, 'resultados'),
+    subscribe(ASIGNACIONES_COMPETENCIAS_COLLECTION, 'asignaciones'),
+  ];
+
+  return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
 export async function obtenerProgramas() {
@@ -162,6 +259,14 @@ export async function desactivarPrograma(id) {
   });
 }
 
+export async function activarPrograma(id) {
+  await updateDoc(doc(db, PROGRAMAS_COLLECTION, id), {
+    activo: true,
+    estado: 'Activo',
+    actualizadoEn: now(),
+  });
+}
+
 export async function guardarFicha(ficha) {
   const numero = cleanText(ficha.numero);
   const programaId = cleanText(ficha.programaId);
@@ -211,17 +316,21 @@ export async function desactivarFicha(id) {
   });
 }
 
+export async function activarFicha(id) {
+  await updateDoc(doc(db, FICHAS_COLLECTION, id), {
+    activo: true,
+    estado: 'Activa',
+    actualizadoEn: now(),
+  });
+}
+
 export async function guardarTrimestre(trimestre) {
   const numero = Number(trimestre.numero);
-  const programaId = cleanText(trimestre.programaId);
-  const programaNombre = cleanText(trimestre.programaNombre);
-  const fichaId = cleanText(trimestre.fichaId);
-  const fichaNumero = cleanText(trimestre.fichaNumero);
   const fechaInicio = normalizeDate(trimestre.fechaInicio);
   const fechaFin = normalizeDate(trimestre.fechaFin);
 
-  if (!numero || numero < 1 || !programaId || !fichaId) {
-    throw new Error('Completa numero, programa y ficha del trimestre.');
+  if (!numero || numero < 1) {
+    throw new Error('Completa el numero del trimestre.');
   }
 
   if (new Date(`${fechaInicio}T00:00:00`) > new Date(`${fechaFin}T00:00:00`)) {
@@ -232,10 +341,6 @@ export async function guardarTrimestre(trimestre) {
     numero,
     fechaInicio,
     fechaFin,
-    programaId,
-    programaNombre,
-    fichaId,
-    fichaNumero,
     activo: trimestre.activo ?? true,
     estado: trimestre.estado || 'Activo',
     actualizadoEn: now(),
@@ -260,6 +365,45 @@ export async function desactivarTrimestre(id) {
   });
 }
 
+export async function activarTrimestre(id) {
+  await updateDoc(doc(db, TRIMESTRES_COLLECTION, id), {
+    activo: true,
+    estado: 'Activo',
+    actualizadoEn: now(),
+  });
+}
+
+export async function asignarTrimestreAFicha({ fichaId, trimestre }) {
+  if (!fichaId || !trimestre?.id) {
+    throw new Error('Selecciona una ficha y un trimestre.');
+  }
+
+  const trimesterLabel = `Trimestre ${trimestre.numero || ''}`.trim();
+  const trimesterPayload = {
+    trimestreId: trimestre.id,
+    trimestreActual: trimesterLabel,
+    trimestreNumero: trimestre.numero || null,
+    trimestreFechaInicio: trimestre.fechaInicio || null,
+    trimestreFechaFin: trimestre.fechaFin || null,
+    actualizadoEn: now(),
+  };
+
+  const batch = writeBatch(db);
+  batch.update(doc(db, FICHAS_COLLECTION, fichaId), trimesterPayload);
+
+  const learnersSnapshot = await getDocs(query(collection(db, USUARIOS_COLLECTION), where('fichaId', '==', fichaId)));
+  learnersSnapshot.docs.forEach((item) => {
+    batch.update(doc(db, USUARIOS_COLLECTION, item.id), trimesterPayload);
+  });
+
+  const assignedUsersSnapshot = await getDocs(query(collection(db, USUARIOS_COLLECTION), where('fichasAsignadas', 'array-contains', fichaId)));
+  assignedUsersSnapshot.docs.forEach((item) => {
+    batch.update(doc(db, USUARIOS_COLLECTION, item.id), trimesterPayload);
+  });
+
+  await batch.commit();
+}
+
 export async function asignarAprendizAFicha({ aprendiz, ficha }) {
   if (!aprendiz?.id) {
     throw new Error('Selecciona un aprendiz valido.');
@@ -269,22 +413,16 @@ export async function asignarAprendizAFicha({ aprendiz, ficha }) {
     throw new Error('Selecciona una ficha valida.');
   }
 
-  if (aprendiz.fichaId) {
-    throw new Error('Este aprendiz ya tiene una ficha asignada.');
-  }
-
-  if (!aprendiz.programaId) {
-    throw new Error('El aprendiz no tiene programa seleccionado.');
-  }
-
-  if (ficha.programaId !== aprendiz.programaId) {
-    throw new Error('La ficha no pertenece al programa seleccionado por el aprendiz.');
-  }
-
   await updateDoc(doc(db, USUARIOS_COLLECTION, aprendiz.id), {
     fichaId: ficha.id,
     ficha: ficha.numero || ficha.id,
+    programaId: ficha.programaId || null,
+    programa: ficha.programaNombre || null,
     trimestreActual: ficha.trimestreActual || null,
+    trimestreId: ficha.trimestreId || null,
+    trimestreNumero: ficha.trimestreNumero || null,
+    trimestreFechaInicio: ficha.trimestreFechaInicio || null,
+    trimestreFechaFin: ficha.trimestreFechaFin || null,
     actualizadoEn: now(),
   });
 }
@@ -298,6 +436,11 @@ export async function assignInstructorToFicha(instructorUid, fichaId) {
     instructorUids: arrayUnion(instructorUid),
     actualizadoEn: now(),
   });
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, instructorUid), {
+    fichasAsignadas: arrayUnion(fichaId),
+    actualizadoEn: now(),
+  });
 }
 
 export async function removeInstructorFromFicha(instructorUid, fichaId) {
@@ -307,6 +450,11 @@ export async function removeInstructorFromFicha(instructorUid, fichaId) {
 
   await updateDoc(doc(db, FICHAS_COLLECTION, fichaId), {
     instructorUids: arrayRemove(instructorUid),
+    actualizadoEn: now(),
+  });
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, instructorUid), {
+    fichasAsignadas: arrayRemove(fichaId),
     actualizadoEn: now(),
   });
 }
@@ -393,4 +541,120 @@ export async function assignPasanteToInstructor(instructorUid, pasanteUid) {
       actualizadoEn: now(),
     });
   }
+}
+
+export async function guardarCompetencia(competencia) {
+  const codigo = cleanText(competencia.codigo).toUpperCase();
+  const nombre = cleanText(competencia.nombre);
+  const descripcion = cleanText(competencia.descripcion);
+
+  if (!codigo || !nombre) {
+    throw new Error('Completa codigo y nombre de la competencia.');
+  }
+
+  const payload = {
+    codigo,
+    nombre,
+    descripcion,
+    activo: competencia.activo ?? true,
+    estado: competencia.estado || 'Activa',
+    actualizadoEn: now(),
+  };
+
+  if (competencia.id) {
+    await updateDoc(doc(db, COMPETENCIAS_COLLECTION, competencia.id), payload);
+    return;
+  }
+
+  await addDoc(collection(db, COMPETENCIAS_COLLECTION), {
+    ...payload,
+    creadoEn: now(),
+  });
+}
+
+export async function desactivarCompetencia(id) {
+  await updateDoc(doc(db, COMPETENCIAS_COLLECTION, id), {
+    activo: false,
+    estado: 'Inactiva',
+    actualizadoEn: now(),
+  });
+}
+
+export async function activarCompetencia(id) {
+  await updateDoc(doc(db, COMPETENCIAS_COLLECTION, id), {
+    activo: true,
+    estado: 'Activa',
+    actualizadoEn: now(),
+  });
+}
+
+export async function guardarResultadoAprendizaje(resultado) {
+  const competenciaId = cleanText(resultado.competenciaId);
+  const codigo = cleanText(resultado.codigo).toUpperCase();
+  const descripcion = cleanText(resultado.descripcion);
+
+  if (!competenciaId || !codigo || !descripcion) {
+    throw new Error('Selecciona competencia y completa codigo y descripcion del RAP.');
+  }
+
+  const payload = {
+    competenciaId,
+    codigo,
+    descripcion,
+    activo: resultado.activo ?? true,
+    estado: resultado.estado || 'Activo',
+    actualizadoEn: now(),
+  };
+
+  if (resultado.id) {
+    await updateDoc(doc(db, RESULTADOS_COLLECTION, resultado.id), payload);
+    return;
+  }
+
+  await addDoc(collection(db, RESULTADOS_COLLECTION), {
+    ...payload,
+    creadoEn: now(),
+  });
+}
+
+export async function desactivarResultadoAprendizaje(id) {
+  await updateDoc(doc(db, RESULTADOS_COLLECTION, id), {
+    activo: false,
+    estado: 'Inactivo',
+    actualizadoEn: now(),
+  });
+}
+
+export async function activarResultadoAprendizaje(id) {
+  await updateDoc(doc(db, RESULTADOS_COLLECTION, id), {
+    activo: true,
+    estado: 'Activo',
+    actualizadoEn: now(),
+  });
+}
+
+export async function asignarCompetenciaInstructor({ instructorUid, fichaId, competenciaId }) {
+  if (!instructorUid || !fichaId || !competenciaId) {
+    throw new Error('Selecciona instructor, ficha y competencia.');
+  }
+
+  const rapSnapshot = await getDocs(
+    query(collection(db, RESULTADOS_COLLECTION), where('competenciaId', '==', competenciaId))
+  );
+  const activeRap = mapSnapshot(rapSnapshot).filter(isActive);
+
+  if (!activeRap.length) {
+    throw new Error('Esta competencia no tiene RAP activos. Crea al menos uno antes de asignarla.');
+  }
+
+  await addDoc(collection(db, ASIGNACIONES_COMPETENCIAS_COLLECTION), {
+    instructorUid,
+    fichaId,
+    competenciaId,
+    resultadoIds: activeRap.map((rap) => rap.id),
+    activo: true,
+    estado: 'Activa',
+    creadoEn: now(),
+    actualizadoEn: now(),
+  });
 }

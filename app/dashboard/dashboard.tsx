@@ -22,6 +22,8 @@ type DashboardAuthState = {
     nombre?: string;
     correo?: string;
     rol?: string;
+    estado?: string;
+    correoVerificado?: boolean;
     fotoUrl?: string | null;
     identificacion?: string;
     programa?: string | null;
@@ -29,6 +31,7 @@ type DashboardAuthState = {
     fichaId?: string | null;
     ficha?: string | null;
     fichasAsignadas?: string[];
+    instructorUid?: string | null;
     trimestreActual?: string | null;
   } | null;
 };
@@ -112,6 +115,7 @@ export default function DashboardScreen() {
     programa: profile.programa || profile.programaId || null,
     ficha: profile.ficha || profile.fichaId || null,
     fichasAsignadas: normalizeAssignedSheets(profile.fichasAsignadas),
+    instructorUid: profile.instructorUid || null,
     trimestreActual: profile.trimestreActual || null,
   };
 
@@ -120,6 +124,41 @@ export default function DashboardScreen() {
   const isInstructor = normalizedRole === 'instructor';
   const isPasante = normalizedRole === 'pasante';
   const isLearner = normalizedRole === 'aprendiz';
+  const isSuspended = String(profile.estado || '').trim().toLowerCase() === 'suspendido';
+
+  if (profile.correoVerificado === false) {
+    return (
+      <>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.loadingScreen}>
+          <Text style={styles.loadingText}>Tu correo aún no está verificado.</Text>
+          <Text style={styles.helperText}>
+            Revisa el enlace que enviamos a tu correo. Luego vuelve a iniciar sesión.
+          </Text>
+          <Pressable onPress={cerrarSesion} style={styles.signOutButton}>
+            <Text style={styles.signOutText}>Cerrar sesión</Text>
+          </Pressable>
+        </View>
+      </>
+    );
+  }
+
+  if (isSuspended) {
+    return (
+      <>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.loadingScreen}>
+          <Text style={styles.loadingText}>Tu cuenta esta suspendida.</Text>
+          <Text style={styles.helperText}>
+            Pide al administrador revisar el estado de tu cuenta para volver a ingresar.
+          </Text>
+          <Pressable onPress={cerrarSesion} style={styles.signOutButton}>
+            <Text style={styles.signOutText}>Cerrar sesión</Text>
+          </Pressable>
+        </View>
+      </>
+    );
+  }
 
   if (!normalizedRole) {
     return (
@@ -131,7 +170,7 @@ export default function DashboardScreen() {
             Un administrador debe asignarte Aprendiz, Instructor, Pasante o Administrador para ingresar.
           </Text>
           <Pressable onPress={cerrarSesion} style={styles.signOutButton}>
-            <Text style={styles.signOutText}>Cerrar sesion</Text>
+            <Text style={styles.signOutText}>Cerrar sesión</Text>
           </Pressable>
         </View>
       </>
@@ -156,7 +195,7 @@ export default function DashboardScreen() {
           <Text style={styles.loadingText}>Rol no reconocido.</Text>
           <Text style={styles.helperText}>Pide al administrador revisar el rol asignado a tu cuenta.</Text>
           <Pressable onPress={cerrarSesion} style={styles.signOutButton}>
-            <Text style={styles.signOutText}>Cerrar sesion</Text>
+            <Text style={styles.signOutText}>Cerrar sesión</Text>
           </Pressable>
         </View>
       )}

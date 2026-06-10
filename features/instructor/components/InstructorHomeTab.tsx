@@ -119,7 +119,7 @@ export function InstructorHomeTab({ session }: { session: AuthenticatedSession }
       <SectionHeading
         actionLabel="Validar"
         subtitle="Aprobacion de proyectos, RAP, competencias y evidencias."
-        title="Validaciones academicas"
+        title="Validaciones académicas"
       />
       <View style={styles.stack}>
         {validationItems.map((item) => (

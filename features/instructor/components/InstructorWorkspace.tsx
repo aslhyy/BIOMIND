@@ -8,6 +8,7 @@ import { assistantPrompts, learnerRoster, projectSnapshots } from '../data';
 import { instructorPalette } from '../theme';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+import { RealAcademicContext } from '@/features/workspace/components/RealAcademicContext';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import { InstructorHomeTab } from './InstructorHomeTab';
@@ -66,7 +67,12 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 124 }]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
-          {activeTab === 'inicio' && <InstructorHomeTab session={session} />}
+          {activeTab === 'inicio' && (
+            <>
+              <InstructorHomeTab session={session} />
+              <RealAcademicContext session={session} />
+            </>
+          )}
           {activeTab === 'aprendices' && (
             <InstructorLearnersTab activeFilter={activeFilter} onFilterChange={setActiveFilter} roster={roster} />
           )}

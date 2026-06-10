@@ -2,8 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import type { ComponentProps } from 'react';
-import { useEffect, useState } from 'react';
-import { obtenerProgramas } from '../../../services/academic';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Animated as RNAnimated,
@@ -21,10 +20,6 @@ import type { RegisterFormProps } from '../types';
 
 type RegisterField = 'nombre' | 'identificacion' | 'correo' | 'contrasena' | 'confirmarContrasena';
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
-type Programa = {
-  id: string;
-  nombre?: string;
-};
 
 const AnimatedText = RNAnimated.createAnimatedComponent(Text);
 
@@ -42,8 +37,6 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     correo: '',
     contrasena: '',
     confirmarContrasena: '',
-    programaId: '',
-    programa: '',
     fotoPerfilUri: '',
     fotoPerfilBase64: '',
     fotoPerfilMimeType: 'image/jpeg',
@@ -51,38 +44,6 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   const [showPass, setShowPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [programas, setProgramas] = useState<Programa[]>([]);
-  const [loadingProgramas, setLoadingProgramas] = useState(true);
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function cargarProgramas() {
-      try {
-        const data = await obtenerProgramas();
-
-        if (mounted) {
-          setProgramas(data);
-        }
-      } catch {
-        showAlert({
-          variant: 'error',
-          title: 'No pudimos cargar programas',
-          message: 'Intenta nuevamente o pide al administrador revisar los programas.',
-        });
-      } finally {
-        if (mounted) {
-          setLoadingProgramas(false);
-        }
-      }
-    }
-
-    cargarProgramas();
-
-    return () => {
-      mounted = false;
-    };
-  }, [showAlert]);
 
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
@@ -108,7 +69,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         showAlert({
           variant: 'warning',
           title: 'Permiso requerido',
-          message: 'Necesitamos permiso para abrir tu galeria y elegir una foto.',
+          message: 'Necesitamos permiso para abrir tu galería y elegir una foto.',
         });
         return;
       }
@@ -133,12 +94,12 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       showAlert({
         variant: 'info',
         title: 'Foto seleccionada',
-        message: 'Tu foto de perfil quedo lista para guardarse con el registro.',
+        message: 'Tu foto de perfil quedó lista para guardarse con el registro.',
       });
     } catch {
       showAlert({
         variant: 'error',
-        title: 'No pudimos abrir la galeria',
+        title: 'No pudimos abrir la galería',
         message: 'Intenta nuevamente para seleccionar tu foto.',
       });
     } finally {
@@ -155,15 +116,6 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       form.confirmarContrasena,
     ];
 
-    if (!form.programaId) {
-      showAlert({
-        variant: 'warning',
-        title: 'Programa requerido',
-        message: 'Selecciona el programa al que perteneces.',
-      });
-      return;
-    }
-
     if (requiredValues.some((value) => !value.trim())) {
       showAlert({
         variant: 'warning',
@@ -176,8 +128,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     if (!validateEmail(form.correo.trim().toLowerCase())) {
       showAlert({
         variant: 'warning',
-        title: 'Correo invalido',
-        message: 'Escribe un correo con formato valido para continuar.',
+        title: 'Correo inválido',
+        message: 'Escribe un correo con formato válido para continuar.',
       });
       return;
     }
@@ -187,7 +139,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     if (!passwordValidation.isValid) {
       showAlert({
         variant: 'warning',
-        title: 'Contrasena insegura',
+        title: 'Contraseña insegura',
         message: passwordValidation.message,
       });
       return;
@@ -196,8 +148,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
     if (form.contrasena !== form.confirmarContrasena) {
       showAlert({
         variant: 'warning',
-        title: 'Contrasenas distintas',
-        message: 'La contrasena y su confirmacion deben coincidir.',
+        title: 'Contraseñas distintas',
+        message: 'La contraseña y su confirmación deben coincidir.',
       });
       return;
     }
@@ -216,8 +168,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         title: registeredUser.rol === 'Administrador' ? 'Administrador creado' : 'Registro exitoso',
         message:
           registeredUser.rol === 'Administrador'
-            ? 'Te enviamos un enlace de verificacion. Al verificar tu correo podras entrar como administrador.'
-            : 'Te enviamos un enlace de verificacion. Luego el administrador debe asignarte un rol para ingresar.',
+            ? 'Te enviamos un enlace de verificación. Al verificar tu correo podrás entrar como administrador.'
+            : 'Te enviamos un enlace de verificación. Luego el administrador debe asignarte un rol para ingresar.',
       });
 
       onRegistered({
@@ -232,13 +184,13 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   };
 
   return (
-    <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+    <ScrollView showsVerticalScrollIndicator={true} keyboardShouldPersistTaps="handled">
       <Pressable onPress={onBack} style={registerStyles.backRow}>
         <Ionicons name="arrow-back-outline" size={20} color="#2FC4B1" />
         <Text style={registerStyles.backText}>Volver</Text>
       </Pressable>
 
-      <Text style={registerStyles.title}>REGISTRATE</Text>
+      <Text style={registerStyles.title}>REGÍSTRATE</Text>
 
       <TouchableOpacity style={registerStyles.photoButton} onPress={pickProfilePhoto} activeOpacity={0.85}>
         {form.fotoPerfilUri ? (
@@ -256,7 +208,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       </TouchableOpacity>
 
       <Text style={registerStyles.photoHint}>
-        El primer usuario sera administrador. Los siguientes usuarios esperan asignacion de rol.
+        El primer usuario será administrador. Los siguientes usuarios esperan asignación de rol.
       </Text>
 
       <AnimatedField
@@ -274,8 +226,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         animation={animations.identificacion}
         icon="card-outline"
         keyboardType="numeric"
-        label="Identificacion"
-        placeholder="Numero de identificacion"
+        label="Identificación"
+        placeholder="Número de identificación"
         value={form.identificacion}
         onBlur={() => animateFocus('identificacion', 0)}
         onChangeText={(value) => update('identificacion', value)}
@@ -287,7 +239,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         autoCapitalize="none"
         icon="mail-outline"
         keyboardType="email-address"
-        label="Correo electronico"
+        label="Correo electrónico"
         placeholder="correo@ejemplo.com"
         value={form.correo}
         onBlur={() => animateFocus('correo', 0)}
@@ -295,58 +247,11 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         onFocus={() => animateFocus('correo', 1)}
       />
 
-      <Text style={registerStyles.label}>Programa</Text>
-
-      <View style={registerStyles.dropdown}>
-        {loadingProgramas ? (
-          <View style={registerStyles.dropdownItem}>
-            <ActivityIndicator color="#2FC4B1" />
-            <Text style={registerStyles.dropdownText}>Cargando programas...</Text>
-          </View>
-        ) : programas.length ? (
-          programas.map((programa) => {
-            const selected = form.programaId === programa.id;
-
-            return (
-              <TouchableOpacity
-                key={programa.id}
-                style={registerStyles.dropdownItem}
-                activeOpacity={0.85}
-                onPress={() =>
-                  setForm((prev) => ({
-                    ...prev,
-                    programaId: programa.id,
-                    programa: programa.nombre || programa.id,
-                  }))
-                }>
-                <Text
-                  style={[
-                    registerStyles.dropdownText,
-                    selected && registerStyles.dropdownTextActive,
-                  ]}>
-                  {programa.nombre || programa.id}
-                </Text>
-
-                {selected ? (
-                  <Ionicons name="checkmark-circle-outline" size={18} color="#2FC4B1" />
-                ) : null}
-              </TouchableOpacity>
-            );
-          })
-        ) : (
-          <View style={registerStyles.dropdownItem}>
-            <Text style={registerStyles.dropdownText}>
-              No hay programas creados por el administrador.
-            </Text>
-          </View>
-        )}
-      </View>
-
       <AnimatedField
         animation={animations.contrasena}
         icon="key-outline"
-        label="Contrasena"
-        placeholder="Contrasena"
+        label="Contraseña"
+        placeholder="Contraseña"
         secureTextEntry={!showPass}
         trailingIcon={showPass ? 'eye-off-outline' : 'eye-outline'}
         value={form.contrasena}
@@ -359,8 +264,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       <AnimatedField
         animation={animations.confirmarContrasena}
         icon="lock-closed-outline"
-        label="Confirmar contrasena"
-        placeholder="Repite tu contrasena"
+        label="Confirmar contraseña"
+        placeholder="Repite tu contraseña"
         secureTextEntry={!showConfirmPass}
         trailingIcon={showConfirmPass ? 'eye-off-outline' : 'eye-outline'}
         value={form.confirmarContrasena}
@@ -371,7 +276,7 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       />
 
       <Text style={registerStyles.passwordHint}>
-        Usa minimo 8 caracteres, una mayuscula, una minuscula y un numero.
+        Usa mínimo 8 caracteres, una mayúscula, una minúscula y un número.
       </Text>
 
       <TouchableOpacity style={registerStyles.button} onPress={handleRegister} activeOpacity={0.85}>
@@ -386,8 +291,8 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
       </TouchableOpacity>
 
       <TouchableOpacity style={registerStyles.linkContainer} onPress={onGoLogin}>
-        <Text style={registerStyles.linkText}>Ya tienes cuenta? </Text>
-        <Text style={[registerStyles.linkText, registerStyles.linkBold]}>Inicia sesion</Text>
+        <Text style={registerStyles.linkText}>¿Ya tienes cuenta? </Text>
+        <Text style={[registerStyles.linkText, registerStyles.linkBold]}>Inicia sesión</Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -435,7 +340,7 @@ function AnimatedField({
           {
             transform: [
               {
-                scale: animation.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
+                scale: animation.interpolate({ inputRange: [0,0], outputRange: [1, 1.0] }),
               },
             ],
           },
@@ -446,7 +351,7 @@ function AnimatedField({
         style={[
           registerStyles.inputWrapper,
           {
-            borderBottomWidth: animation.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }),
+            borderBottomWidth: animation.interpolate({ inputRange: [0, 0], outputRange: [1, 1.0] }),
           },
         ]}>
         <AnimatedText

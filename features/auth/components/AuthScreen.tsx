@@ -30,6 +30,9 @@ export function AuthScreen() {
   const [fontsLoaded] = useFonts({
     SulphurPoint: require('../../../assets/fonts/SulphurPoint-Light.ttf'),
     SulphurPointBold: require('../../../assets/fonts/SulphurPoint-Bold.ttf'),
+    PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
+    PoppinsMedium: require('../../../assets/fonts/Poppins/Poppins-Medium.ttf'),
+    PoppinsSemiBold: require('../../../assets/fonts/Poppins/Poppins-SemiBold.ttf'),
   });
 
   const imageIOpacity = useRef(new RNAnimated.Value(1)).current;
@@ -44,9 +47,9 @@ export function AuthScreen() {
 
   const heights: Record<AuthView, number> = {
     bienvenida: height * 0.54,
-    login: height * 0.58,
-    register: height * 0.9,
-    verify: height * 0.68,
+    login: height * 0.5,
+    register: height * 0.76,
+    verify: height * 0.64,
   };
 
   const dismissAlert = (id: string) => {

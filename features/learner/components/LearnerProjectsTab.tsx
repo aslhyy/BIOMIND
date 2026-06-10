@@ -23,7 +23,7 @@ export function LearnerProjectsTab({
   return (
     <>
       <LearnerSectionIntroo
-        label="Gestion de cultivos"
+        label="Gestión de cultivos"
         text="Consulta el estado de cada cultivo, registra avances por voz y abre el chat IA del proyecto seleccionado."
         title="Seguimiento de proyectos y evidencias."
       />
@@ -132,7 +132,7 @@ export function LearnerProjectsTab({
       <SectionHeading
         actionLabel="RAP"
         subtitle="Competencias y resultados asociados a tus proyectos."
-        title="Avance academico"
+        title="Avance académico"
       />
 
       <View style={styles.stack}>

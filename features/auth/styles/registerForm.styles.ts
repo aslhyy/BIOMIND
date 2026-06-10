@@ -1,11 +1,12 @@
-import { Platform, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 
 export const registerStyles = StyleSheet.create({
   backRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginBottom: 12,
+    gap: 7,
+    marginTop: 8,
+    marginBottom: 8,
   },
   backText: {
     color: '#2FC4B1',
@@ -17,8 +18,8 @@ export const registerStyles = StyleSheet.create({
     fontWeight: '800',
     color: '#117C72',
     letterSpacing: 2,
-    marginBottom: 12,
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPointBold' : 'serif',
+    marginTop: 16,
+    fontFamily: 'SulphurPointBold',
   },
   photoButton: {
     position: 'absolute',
@@ -57,44 +58,44 @@ export const registerStyles = StyleSheet.create({
     textAlign: 'center',
   },
   photoHint: {
-    marginTop: 74,
-    marginBottom: 2,
+    marginTop: 28,
+    marginBottom: 0,
     fontSize: 12,
     color: '#8AA69C',
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPoint' : 'serif',
+    fontFamily: 'PoppinsRegular',
   },
   label: {
-    fontSize: 14,
+    fontSize: 17,
     fontWeight: '600',
     color: '#2FC4B1',
-    marginBottom: 4,
-    marginTop: 14,
-    letterSpacing: 0.5,
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPointBold' : 'serif',
+    marginBottom: 3,
+    marginTop: 20,
+    letterSpacing: 0,
+    fontFamily: 'SulphurPointBold',
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1.5,
     borderBottomColor: '#2FC4B1',
-    paddingBottom: 8,
-    marginBottom: 2,
+    paddingBottom: 5,
+    marginBottom: 0,
   },
   inputIcon: {
-    marginRight: 8,
+    marginRight: 5,
   },
   input: {
     flex: 1,
     fontSize: 15,
     color: '#575757',
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPoint' : 'serif',
-    paddingVertical: 4,
+    fontFamily: 'PoppinsRegular',
+    paddingVertical: 2,
   },
   passwordHint: {
-    marginTop: 8,
+    marginTop: 15,
     fontSize: 12,
     color: '#8AA69C',
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPoint' : 'serif',
+    fontFamily: 'PoppinsRegular',
   },
   dropdown: {
     backgroundColor: 'transparent',
@@ -112,12 +113,12 @@ export const registerStyles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#6a94846e',
+    borderBottomColor: '#05ed946e',
   },
   dropdownText: {
     fontSize: 15,
     color: '#9AA8A0',
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPoint' : 'serif',
+    fontFamily: 'PoppinsRegular',
   },
   dropdownTextActive: {
     color: '#2FC4B1',
@@ -130,7 +131,7 @@ export const registerStyles = StyleSheet.create({
     backgroundColor: '#2FC4B1',
     borderRadius: 30,
     paddingVertical: 16,
-    marginTop: 28,
+    marginTop: 16,
     gap: 8,
     shadowColor: '#2FC4B1',
     shadowOpacity: 0.35,
@@ -142,18 +143,21 @@ export const registerStyles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.5,
+    fontFamily: 'PoppinsSemiBold',
   },
   linkContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginTop: 20,
+    marginTop: 12,
   },
   linkText: {
     fontSize: 14,
     color: '#9AA8A0',
+    fontFamily: 'PoppinsRegular',
   },
   linkBold: {
     color: '#2FC4B1',
     fontWeight: '700',
+    fontFamily: 'PoppinsSemiBold',
   },
 });

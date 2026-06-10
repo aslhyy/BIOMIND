@@ -1,11 +1,12 @@
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { instructorProfile, sheetOverviews } from '../data';
+import { instructorProfile } from '../data';
 import { instructorPalette } from '../theme';
 import { ProgressBar, SectionHeading } from './InstructorUI';
 import { actualizarPerfilUsuario } from '@/services/auth';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+import { useAssignedSheetLabels } from '@/features/workspace/components/RealAcademicContext';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 
 export function InstructorProfileTab({
@@ -37,6 +38,7 @@ export function InstructorProfileTab({
   const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const assignedSheetLabels = useAssignedSheetLabels(session);
 
   useEffect(() => {
     setName(session.name);
@@ -125,11 +127,11 @@ export function InstructorProfileTab({
 
         <View style={styles.fichasCard}>
           <Text style={styles.fichasTitle}>Fichas asignadas</Text>
-          {sheetOverviews.map((sheet) => (
-            <Text key={sheet.id} style={styles.fichaItem}>
-              Ficha {sheet.code} - {sheet.trimester}
+          {assignedSheetLabels.length ? assignedSheetLabels.map((label) => (
+            <Text key={label} style={styles.fichaItem}>
+              {label}
             </Text>
-          ))}
+          )) : <Text style={styles.fichaItem}>Aún no tienes fichas asignadas.</Text>}
         </View>
 
         <View style={styles.profileActions}>

@@ -1,6 +1,5 @@
 import {
   createUserWithEmailAndPassword,
-  deleteUser,
   reload,
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -10,7 +9,7 @@ import {
 } from 'firebase/auth';
 import {
   collection,
-  deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -52,6 +51,27 @@ function canUseAsAuthPhotoUrl(photoUrl) {
   return typeof photoUrl === 'string' && /^https?:\/\//i.test(photoUrl);
 }
 
+async function enviarCorreoVerificacionUsuario(user) {
+  await reload(user);
+
+  if (user.emailVerified) {
+    return {
+      alreadyVerified: true,
+      email: user.email || null,
+    };
+  }
+
+  // Refresh the token before requesting the email. This avoids stale sessions
+  // after registration, profile updates, or a previous resend attempt.
+  await user.getIdToken(true);
+  await sendEmailVerification(user);
+
+  return {
+    alreadyVerified: false,
+    email: user.email || null,
+  };
+}
+
 function buildUserProfile({
   uid,
   nombre,
@@ -84,21 +104,41 @@ function buildUserProfile({
   };
 }
 
+async function guardarEstadoVerificacion(userRef, correoVerificado) {
+  try {
+    await updateDoc(userRef, {
+      correoVerificado,
+      correoVerificacionEnviadaEn: deleteField(),
+      correoVerificacionConfirmadaEn: deleteField(),
+      actualizadoEn: new Date(),
+    });
+  } catch {
+    // Email delivery must not be reported as failed because Firestore rejected
+    // this optional synchronization. Login will reconcile the value later.
+  }
+}
+
 async function sincronizarCorreoVerificado(userRef, perfil, emailVerified) {
-  if (perfil.correoVerificado === emailVerified) {
+  const hasLegacyVerificationFields =
+    'correoVerificacionEnviadaEn' in perfil || 'correoVerificacionConfirmadaEn' in perfil;
+
+  if (perfil.correoVerificado === emailVerified && !hasLegacyVerificationFields) {
     return perfil;
   }
 
   const actualizadoEn = new Date();
-
-  await updateDoc(userRef, {
+  const updates = {
     correoVerificado: emailVerified,
+    correoVerificacionEnviadaEn: deleteField(),
+    correoVerificacionConfirmadaEn: deleteField(),
     actualizadoEn,
-  });
+  };
+
+  await updateDoc(userRef, updates);
 
   return {
     ...perfil,
-    correoVerificado: emailVerified,
+    ...updates,
     actualizadoEn,
   };
 }
@@ -123,7 +163,7 @@ async function resolverRolInicial() {
   }
 }
 
-async function restaurarPerfilAuthExistente(form, normalizedPrograma, normalizedFicha) {
+async function restaurarPerfilAuthExistente(form) {
   const {
     correo,
     contrasena,
@@ -158,27 +198,27 @@ async function restaurarPerfilAuthExistente(form, normalizedPrograma, normalized
       uid: cred.user.uid,
       nombre,
       identificacion,
-      programaId: normalizedProgramaId,
-      programa: normalizedPrograma,
+      programaId: null,
+      programa: null,
       fichaId: null,
-      ficha: normalizedFicha,
+      ficha: null,
       rol: rolInicial,
       correo,
       fotoUrl,
-      correoVerificado: cred.user.emailVerified,
+      correoVerificado: false,
     });
 
     await completarRegistroUsuario(cred.user, profileData, fotoUrl);
 
-    if (!cred.user.emailVerified) {
-      await sendEmailVerification(cred.user);
-    }
+    const verificationDelivery = await enviarCorreoVerificacionUsuario(cred.user);
+    await guardarEstadoVerificacion(userRef, verificationDelivery.alreadyVerified);
 
     return {
       correo,
       nombre,
       fotoUrl,
       rol: rolInicial,
+      correoVerificacionEnviada: !verificationDelivery.alreadyVerified,
     };
   } finally {
     try {
@@ -198,17 +238,14 @@ export async function registrar(form) {
     fotoPerfilBase64,
     fotoPerfilMimeType,
   } = form;
-  const normalizedProgramaId = form.programaId || null;
-  const normalizedPrograma = form.programa || null;
-  const normalizedFicha = null;
-
   let cred;
+  let profileCreated = false;
 
   try {
     cred = await createUserWithEmailAndPassword(auth, correo, contrasena);
   } catch (error) {
     if (error?.code === 'auth/email-already-in-use') {
-      return restaurarPerfilAuthExistente(form, normalizedPrograma, normalizedFicha);
+      return restaurarPerfilAuthExistente(form);
     }
 
     throw error;
@@ -223,36 +260,52 @@ export async function registrar(form) {
       uid: cred.user.uid,
       nombre,
       identificacion,
-      programaId: normalizedProgramaId,
-      programa: normalizedPrograma,
+      programaId: null,
+      programa: null,
       fichaId: null,
-      ficha: normalizedFicha,
+      ficha: null,
       rol: rolInicial,
       correo,
       fotoUrl,
     });
 
     await completarRegistroUsuario(cred.user, profileData, fotoUrl);
-    await sendEmailVerification(cred.user);
-    await signOut(auth);
+    profileCreated = true;
+    const verificationDelivery = await enviarCorreoVerificacionUsuario(cred.user);
+    await guardarEstadoVerificacion(userRef, verificationDelivery.alreadyVerified);
+
+    try {
+      await signOut(auth);
+    } catch {
+      // The verification request already succeeded; a sign-out failure must
+      // not turn it into a false "email not sent" result.
+    }
 
     return {
       correo,
       nombre,
       fotoUrl,
       rol: rolInicial,
+      correoVerificacionEnviada: !verificationDelivery.alreadyVerified,
     };
   } catch (error) {
-    try {
-      await deleteDoc(userRef);
-    } catch {
-      // ignore cleanup failures; deleting the auth user is the priority
-    }
+    if (profileCreated) {
+      try {
+        await signOut(auth);
+      } catch {
+        // Keep the account so verification can be resent.
+      }
 
-    try {
-      await deleteUser(cred.user);
-    } catch {
-      // ignore cleanup failures; the original error is more useful to surface
+      if (error?.code) {
+        error.correo = correo;
+        throw error;
+      }
+
+      throw createFlowError(
+        'auth/verification-email-not-sent',
+        'La cuenta fue creada, pero Firebase no pudo enviar el correo. Inicia sesión y usa Reenviar correo.',
+        { correo }
+      );
     }
 
     throw error;
@@ -268,7 +321,7 @@ export async function iniciarSesion(correo, contrasena) {
     await signOut(auth);
     throw createFlowError(
       'auth/email-not-verified',
-      'Tu cuenta aún no ha sido verificada.',
+      'Tu cuenta aun no ha sido verificada.',
       { correo }
     );
   }
@@ -280,7 +333,7 @@ export async function iniciarSesion(correo, contrasena) {
     await signOut(auth);
     throw createFlowError(
       'auth/profile-not-found',
-      'Tu cuenta existe, pero aÃºn no tiene perfil en Biomind. Contacta al administrador.'
+      'Tu cuenta existe, pero aun no tiene perfil en Biomind. Contacta al administrador.'
     );
   }
 
@@ -289,14 +342,6 @@ export async function iniciarSesion(correo, contrasena) {
     snapshot.data(),
     cred.user.emailVerified
   );
-
-  if (!String(perfil.rol || '').trim()) {
-    await signOut(auth);
-    throw createFlowError(
-      'auth/role-not-assigned',
-      'Tu cuenta estÃ¡ pendiente de asignaciÃ³n de rol por parte del administrador.'
-    );
-  }
 
   return {
     user: cred.user,
@@ -317,10 +362,15 @@ export async function reenviarCorreoVerificacion(correo, contrasena) {
       );
     }
 
-    await sendEmailVerification(cred.user);
+    const verificationDelivery = await enviarCorreoVerificacionUsuario(cred.user);
+    await guardarEstadoVerificacion(
+      doc(db, USUARIOS_COLLECTION, cred.user.uid),
+      verificationDelivery.alreadyVerified
+    );
 
     return {
       correo: cred.user.email || correo,
+      correoVerificacionEnviada: !verificationDelivery.alreadyVerified,
     };
   } finally {
     try {

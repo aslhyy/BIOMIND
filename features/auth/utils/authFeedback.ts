@@ -87,6 +87,13 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
         message:
           'Tu cuenta aún no ha sido verificada. Revisa el enlace que te enviamos y luego intenta iniciar sesión otra vez.',
       };
+    case 'auth/verification-email-not-sent':
+      return {
+        variant: 'warning',
+        title: 'Cuenta creada',
+        message:
+          'La cuenta se guardó, pero no pudimos enviar el correo. Inicia sesión y toca Reenviar correo de verificación.',
+      };
     case 'auth/already-verified':
       return {
         variant: 'info',

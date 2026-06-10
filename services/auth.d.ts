@@ -4,8 +4,8 @@ declare module '@/services/auth' {
         contrasena: string;
         nombre: string;
         identificacion: string;
-        programaId: string;
-        programa: string;
+        programaId?: string | null;
+        programa?: string | null;
         fotoPerfilBase64?: string | null;
         fotoPerfilMimeType?: string;
     }

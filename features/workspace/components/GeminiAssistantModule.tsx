@@ -343,7 +343,7 @@ export function GeminiAssistantModule({
 
     if (!isSpeechRecognitionSupported()) {
       setVoiceSupportedMessage(
-        'El dictado por voz quedo listo para navegadores compatibles. En Expo Go movil hace falta integrar el proveedor nativo de reconocimiento.'
+        'El dictado por voz quedó listo para navegadores compatibles. En Expo Go móvil hace falta integrar el proveedor nativo de reconocimiento.'
       );
       return;
     }

@@ -95,7 +95,7 @@ export function InstructorProjectsTab() {
   return (
     <>
       <View style={styles.heroCard}>
-        <Text style={styles.heroLabel}>Gestion de cultivos</Text>
+        <Text style={styles.heroLabel}>Gestión de cultivos</Text>
         <Text style={styles.heroTitle}>Gestión de proyectos y evidencias.</Text>
         <Text style={styles.heroText}>
           El instructor puede crear proyectos, elegir icono, adjuntar guía, compartir con fichas o aprendices y responder dudas.

@@ -1,11 +1,11 @@
-import { Platform, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 
 export const loginStyles = StyleSheet.create({
   backRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginBottom: 12,
+    gap: 7,
+    marginTop: 12,
   },
   backText: {
     color: '#2FC4B1',
@@ -17,35 +17,35 @@ export const loginStyles = StyleSheet.create({
     fontWeight: '800',
     color: '#117C72',
     letterSpacing: 2,
-    marginBottom: 12,
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPointBold' : 'serif',
+    marginTop: 16,
+    fontFamily: 'SulphurPointBold',
   },
   label: {
-    fontSize: 14,
+    fontSize: 17,
     fontWeight: '600',
     color: '#2FC4B1',
-    marginBottom: 4,
-    marginTop: 14,
-    letterSpacing: 0.5,
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPointBold' : 'serif',
+    marginBottom: 3,
+    marginTop: 20,
+    letterSpacing: 0,
+    fontFamily: 'SulphurPointBold',
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1.5,
     borderBottomColor: '#2FC4B1',
-    paddingBottom: 8,
-    marginBottom: 2,
+    paddingBottom: 5,
+    marginBottom: 0,
   },
   input: {
     flex: 1,
     fontSize: 15,
     color: '#575757',
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPoint' : 'serif',
-    paddingVertical: 4,
+    fontFamily: 'PoppinsRegular',
+    paddingVertical: 2,
   },
   helpRow: {
-    marginTop: 18,
+    marginTop: 15,
     alignItems: 'flex-start',
   },
   secondaryPill: {
@@ -63,7 +63,7 @@ export const loginStyles = StyleSheet.create({
     color: '#117C72',
     fontSize: 14,
     fontWeight: '700',
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPointBold' : 'serif',
+    fontFamily: 'PoppinsSemiBold',
   },
   button: {
     flexDirection: 'row',
@@ -72,7 +72,7 @@ export const loginStyles = StyleSheet.create({
     backgroundColor: '#2FC4B1',
     borderRadius: 30,
     paddingVertical: 16,
-    marginTop: 24,
+    marginTop: 16,
     gap: 8,
     shadowColor: '#2FC4B1',
     shadowOpacity: 0.35,
@@ -84,19 +84,21 @@ export const loginStyles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.5,
-    fontFamily: Platform.OS === 'ios' ? 'SulphurPointBold' : 'serif',
+    fontFamily: 'PoppinsSemiBold',
   },
   linkContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginTop: 20,
+    marginTop: 12,
   },
   linkText: {
     fontSize: 14,
     color: '#9AA8A0',
+    fontFamily: 'PoppinsRegular',
   },
   linkBold: {
     color: '#2FC4B1',
     fontWeight: '700',
+    fontFamily: 'PoppinsSemiBold',
   },
 });

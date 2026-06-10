@@ -8,6 +8,7 @@ import { learnerAssistantQuestions, learnerProjects } from '../data';
 import { learnerPalette } from '@/features/learner/theme';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+import { RealAcademicContext } from '@/features/workspace/components/RealAcademicContext';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
 import { LearnerHistoryTab } from './LearnerHistoryTab';
@@ -120,7 +121,10 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
           {activeTab === 'inicio' && (
-            <LearnerHomeTab session={session} onOpenAssistant={openAssistantForProject} />
+            <>
+              <LearnerHomeTab session={session} onOpenAssistant={openAssistantForProject} />
+              <RealAcademicContext session={session} />
+            </>
           )}
           {activeTab === 'historial' && <LearnerHistoryTab />}
           {activeTab === 'asistente' && (

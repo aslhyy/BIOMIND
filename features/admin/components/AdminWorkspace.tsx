@@ -2,18 +2,33 @@ import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import {
+  activarCompetencia,
+  activarFicha,
+  activarPrograma,
+  activarResultadoAprendizaje,
+  activarTrimestre,
   asignarAprendizAFicha,
+  asignarCompetenciaInstructor,
+  asignarTrimestreAFicha,
+  assignInstructorToFicha,
+  assignPasanteToInstructor,
   calcularTrimestreActual,
+  desactivarCompetencia,
   desactivarFicha,
   desactivarPrograma,
+  desactivarResultadoAprendizaje,
   desactivarTrimestre,
+  escucharAsignacionesCompetencias,
+  escucharCompetencias,
   escucharFichas,
   escucharProgramas,
+  escucharResultadosAprendizaje,
   escucharTrimestres,
+  guardarCompetencia,
   guardarFicha,
   guardarPrograma,
+  guardarResultadoAprendizaje,
   guardarTrimestre,
-  obtenerFichasPorPrograma,
 } from '@/services/academic';
 import { asignarRolUsuario, eliminarUsuarioAdmin, escucharUsuariosAdmin, suspenderUsuarioAdmin } from '@/services/adminUsers';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -78,6 +93,8 @@ type AdminUser = {
   programa?: string | null;
   fichaId?: string | null;
   ficha?: string | null;
+  estado?: string;
+  fichasAsignadas?: string[];
   trimestreActual?: string | null;
 };
 
@@ -85,6 +102,7 @@ type AcademicProgram = {
   id: string;
   codigo?: string;
   nombre?: string;
+  activo?: boolean;
   estado?: string;
 };
 
@@ -93,6 +111,14 @@ type AcademicSheet = {
   numero?: string;
   programaId?: string;
   programaNombre?: string;
+  activo?: boolean;
+  instructorUids?: string[];
+  pasantesUids?: string[];
+  trimestreId?: string | null;
+  trimestreActual?: string | null;
+  trimestreNumero?: number | null;
+  trimestreFechaInicio?: string | null;
+  trimestreFechaFin?: string | null;
   estado?: string;
 };
 
@@ -101,10 +127,33 @@ type AcademicTrimester = {
   numero?: number;
   fechaInicio?: string;
   fechaFin?: string;
-  programaId?: string;
-  programaNombre?: string;
+  activo?: boolean;
+  estado?: string;
+};
+
+type AcademicCompetence = {
+  id: string;
+  codigo?: string;
+  nombre?: string;
+  descripcion?: string;
+  activo?: boolean;
+  estado?: string;
+};
+
+type LearningResult = {
+  id: string;
+  competenciaId?: string;
+  codigo?: string;
+  descripcion?: string;
+  activo?: boolean;
+  estado?: string;
+};
+
+type CompetenceAssignment = {
+  id: string;
+  competenciaId?: string;
   fichaId?: string;
-  fichaNumero?: string;
+  instructorUid?: string;
   estado?: string;
 };
 
@@ -118,6 +167,14 @@ const demoTrimesters: AcademicTrimester[] = [];
 
 function isDemoRecord(id?: string) {
   return String(id || '').startsWith('demo-');
+}
+
+function isActiveRecord(record: { activo?: boolean; estado?: string }) {
+  return record.activo !== false && record.estado !== 'Inactivo' && record.estado !== 'Inactiva';
+}
+
+function hasVerifiedEmail(user: AdminUser) {
+  return user.correoVerificado === true;
 }
 
 const academicBlocks = [
@@ -154,6 +211,9 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
   const [programs, setPrograms] = useState<AcademicProgram[]>([]);
   const [sheets, setSheets] = useState<AcademicSheet[]>([]);
   const [trimesters, setTrimesters] = useState<AcademicTrimester[]>([]);
+  const [competences, setCompetences] = useState<AcademicCompetence[]>([]);
+  const [learningResults, setLearningResults] = useState<LearningResult[]>([]);
+  const [competenceAssignments, setCompetenceAssignments] = useState<CompetenceAssignment[]>([]);
   const [academicLoading, setAcademicLoading] = useState(true);
   const [academicError, setAcademicError] = useState('');
   const [fontsLoaded] = useFonts({
@@ -165,14 +225,18 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
 
   const counts = useMemo(
     () => ({
-      pendingUsers: adminUsers.filter((user) => user.correoVerificado && !String(user.rol || '').trim()).length,
-      activeSheets: (sheets.length ? sheets : demoAcademicSheets).filter((sheet) => sheet.estado !== 'Inactiva').length,
-      learners: formationSheets.reduce((total, sheet) => total + sheet.learners, 0),
-      trimesterUpdates: (trimesters.length ? trimesters : demoTrimesters).filter(
-        (trimester) => trimester.estado !== 'Inactivo'
-      ).length,
+      pendingUsers: adminUsers.filter((user) => hasVerifiedEmail(user) && !String(user.rol || '').trim()).length,
+      activeSheets: sheets.filter(isActiveRecord).length,
+      learners: adminUsers.filter((user) => String(user.rol || '').toLowerCase() === 'aprendiz').length,
+      trimesterUpdates: trimesters.filter(isActiveRecord).length,
+      programs: programs.filter(isActiveRecord).length,
+      instructors: adminUsers.filter((user) => String(user.rol || '').toLowerCase() === 'instructor').length,
+      pasantes: adminUsers.filter((user) => String(user.rol || '').toLowerCase() === 'pasante').length,
+      assignedLearners: adminUsers.filter((user) => String(user.rol || '').toLowerCase() === 'aprendiz' && user.fichaId).length,
+      competenceAssignments: competenceAssignments.filter(isActiveRecord).length,
+      totalUsers: adminUsers.length,
     }),
-    [adminUsers, sheets, trimesters]
+    [adminUsers, competenceAssignments, programs, sheets, trimesters]
   );
 
   useEffect(() => {
@@ -228,6 +292,39 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
           setAcademicLoading(false);
         }
       ),
+      escucharCompetencias(
+        (nextCompetences: AcademicCompetence[]) => {
+          setCompetences(nextCompetences);
+          setAcademicError('');
+          setAcademicLoading(false);
+        },
+        (error: any) => {
+          setAcademicError(error?.message || 'No pudimos cargar competencias.');
+          setAcademicLoading(false);
+        }
+      ),
+      escucharResultadosAprendizaje(
+        (nextResults: LearningResult[]) => {
+          setLearningResults(nextResults);
+          setAcademicError('');
+          setAcademicLoading(false);
+        },
+        (error: any) => {
+          setAcademicError(error?.message || 'No pudimos cargar RAP.');
+          setAcademicLoading(false);
+        }
+      ),
+      escucharAsignacionesCompetencias(
+        (nextAssignments: CompetenceAssignment[]) => {
+          setCompetenceAssignments(nextAssignments);
+          setAcademicError('');
+          setAcademicLoading(false);
+        },
+        (error: any) => {
+          setAcademicError(error?.message || 'No pudimos cargar asignaciones de competencias.');
+          setAcademicLoading(false);
+        }
+      ),
     ];
 
     return () => {
@@ -275,15 +372,18 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
             <AcademicTab
               error={academicError}
               loading={academicLoading}
+              assignments={competenceAssignments}
+              competences={competences}
+              learningResults={learningResults}
               programs={programs.length ? programs : demoPrograms}
               sheets={sheets.length ? sheets : demoAcademicSheets}
+              users={adminUsers}
             />
           )}
           {activeTab === 'trimestres' && (
             <TrimesterTab
               error={academicError}
               loading={academicLoading}
-              programs={programs.length ? programs : demoPrograms}
               sheets={sheets.length ? sheets : demoAcademicSheets}
               trimesters={trimesters.length ? trimesters : demoTrimesters}
             />
@@ -322,7 +422,7 @@ function HeaderCard({ session }: { session: AuthenticatedSession }) {
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Hola, {getFirstName(session.name)}</Text>
           <Text style={styles.headerSubtitle}>
-            Controla usuarios, roles, fichas, asignaciones academicas, pasantes y trimestres.
+            Controla usuarios, roles, fichas, asignaciones académicas, pasantes y trimestres.
           </Text>
         </View>
         <UserAvatar name={session.name} photoUrl={session.photoUrl} size={82} />
@@ -335,7 +435,18 @@ function AdminHome({
   counts,
   onOpenTab,
 }: {
-  counts: { pendingUsers: number; activeSheets: number; learners: number; trimesterUpdates: number };
+  counts: {
+    pendingUsers: number;
+    activeSheets: number;
+    learners: number;
+    trimesterUpdates: number;
+    programs: number;
+    instructors: number;
+    pasantes: number;
+    assignedLearners: number;
+    competenceAssignments: number;
+    totalUsers: number;
+  };
   onOpenTab: (tab: AdminTab) => void;
 }) {
   return (
@@ -396,9 +507,16 @@ function AdminHome({
         </View>
       </Section>
 
-      <Section title="Flujos cubiertos" subtitle="Operaciones que sostienen los permisos por rol">
+      <Section title="Estado actual" subtitle="Resumen real de la información guardada en Biomind">
         <View style={styles.flowGrid}>
-          {adminFlows.map((flow) => (
+          {[
+            { label: 'Programas activos', icon: 'book-education-outline' as AdminIconName, done: counts.programs },
+            { label: 'Aprendices con ficha', icon: 'account-multiple-plus-outline' as AdminIconName, done: counts.assignedLearners },
+            { label: 'Instructores', icon: 'account-school-outline' as AdminIconName, done: counts.instructors },
+            { label: 'Pasantes', icon: 'account-tie-outline' as AdminIconName, done: counts.pasantes },
+            { label: 'Competencias asignadas', icon: 'source-branch' as AdminIconName, done: counts.competenceAssignments },
+            { label: 'Usuarios totales', icon: 'account-group-outline' as AdminIconName, done: counts.totalUsers },
+          ].map((flow) => (
             <View key={flow.label} style={styles.flowCard}>
               <MaterialCommunityIcons name={flow.icon} size={20} color={palette.primary} />
               <Text style={styles.flowNumber}>{flow.done}</Text>
@@ -428,8 +546,8 @@ function UsersTab({
   onAssignRole: (uid: string, role: string) => void;
   onRoleChange: (role: string) => void;
 }) {
-  const verifiedUsers = users.filter((user) => user.correoVerificado);
-  const unverifiedUsers = users.filter((user) => !user.correoVerificado);
+  const verifiedUsers = users.filter(hasVerifiedEmail);
+  const unverifiedUsers = users.filter((user) => !hasVerifiedEmail(user));
 
   return (
     <>
@@ -439,7 +557,7 @@ function UsersTab({
         title="Usuarios"
       />
 
-      <Section title="Asignar rol" subtitle="Solo aparecen para asignacion los usuarios con correo verificado">
+      <Section title="Asignar rol" subtitle="Solo aparecen para asignación los usuarios con correo verificado">
         <View style={styles.segmented}>
           {roleOptions.map((role) => (
             <Pressable
@@ -485,38 +603,12 @@ function UsersTab({
                   }
                 }}
               />
-
-              {String(user.rol || '').toLowerCase() === 'aprendiz' && !user.fichaId ? (
-                <Pressable
-                  style={styles.assignButton}
-                  onPress={async () => {
-                    try {
-                      const fichas = await obtenerFichasPorPrograma(user.programaId);
-
-                      if (!fichas.length) {
-                        alert('No hay fichas para el programa de este aprendiz.');
-                        return;
-                      }
-
-                      await asignarAprendizAFicha({
-                        aprendiz: user,
-                        ficha: fichas[0],
-                      });
-
-                      alert('Ficha asignada correctamente.');
-                    } catch (error: any) {
-                      alert(error?.message || 'No pudimos asignar la ficha.');
-                    }
-                  }}>
-                  <Text style={styles.assignButtonText}>Asignar primera ficha disponible</Text>
-                </Pressable>
-              ) : null}
             </View>
           ))
         ) : (
           <FeedbackBox
             icon="account-clock-outline"
-            text="Aun no hay usuarios con correo verificado esperando rol."
+            text="Aún no hay usuarios con correo verificado esperando rol."
             tone="info"
           />
         )}
@@ -540,20 +632,39 @@ function UsersTab({
 }
 
 function AcademicTab({
+  assignments,
+  competences,
   error,
+  learningResults,
   loading,
   programs,
   sheets,
+  users,
 }: {
+  assignments: CompetenceAssignment[];
+  competences: AcademicCompetence[];
   error: string;
+  learningResults: LearningResult[];
   loading: boolean;
   programs: AcademicProgram[];
   sheets: AcademicSheet[];
+  users: AdminUser[];
 }) {
-  const activePrograms = programs.filter((program) => program.estado !== 'Inactivo');
+  const activePrograms = programs.filter(isActiveRecord);
+  const activeSheets = sheets.filter(isActiveRecord);
+  const learners = users.filter((user) => String(user.rol || '').toLowerCase() === 'aprendiz' && user.estado !== 'suspendido');
+  const instructors = users.filter((user) => String(user.rol || '').toLowerCase() === 'instructor' && user.estado !== 'suspendido');
+  const pasantes = users.filter((user) => String(user.rol || '').toLowerCase() === 'pasante' && user.estado !== 'suspendido');
+  const activeCompetences = competences.filter(isActiveRecord);
   const firstProgramId = activePrograms[0]?.id || '';
   const [programForm, setProgramForm] = useState({ id: '', codigo: '', nombre: '' });
   const [sheetForm, setSheetForm] = useState({ id: '', numero: '', programaId: firstProgramId });
+  const [competenceForm, setCompetenceForm] = useState({ id: '', codigo: '', nombre: '', descripcion: '' });
+  const [rapForm, setRapForm] = useState({ id: '', competenciaId: '', codigo: '', descripcion: '' });
+  const [learnerFicha, setLearnerFicha] = useState({ learnerUid: '', fichaId: '' });
+  const [instructorFicha, setInstructorFicha] = useState({ instructorUid: '', fichaId: '' });
+  const [pasanteInstructor, setPasanteInstructor] = useState({ pasanteUid: '', instructorUid: '' });
+  const [competenceAssignment, setCompetenceAssignment] = useState({ instructorUid: '', fichaId: '', competenciaId: '' });
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
 
@@ -563,8 +674,66 @@ function AcademicTab({
     }
   }, [firstProgramId, sheetForm.programaId]);
 
+  useEffect(() => {
+    const firstInstructorId = instructors[0]?.id || '';
+    const firstLearnerId = learners[0]?.id || '';
+    const firstPasanteId = pasantes[0]?.id || '';
+    const firstSheetId = activeSheets[0]?.id || '';
+    const firstCompetenceId = activeCompetences[0]?.id || '';
+
+    setLearnerFicha((current) => {
+      const next = {
+        learnerUid: current.learnerUid || firstLearnerId,
+        fichaId: current.fichaId || firstSheetId,
+      };
+      return next.learnerUid === current.learnerUid && next.fichaId === current.fichaId ? current : next;
+    });
+    setInstructorFicha((current) => {
+      const next = {
+        instructorUid: current.instructorUid || firstInstructorId,
+        fichaId: current.fichaId || firstSheetId,
+      };
+      return next.instructorUid === current.instructorUid && next.fichaId === current.fichaId ? current : next;
+    });
+    setPasanteInstructor((current) => {
+      const next = {
+        pasanteUid: current.pasanteUid || firstPasanteId,
+        instructorUid: current.instructorUid || firstInstructorId,
+      };
+      return next.pasanteUid === current.pasanteUid && next.instructorUid === current.instructorUid ? current : next;
+    });
+    setCompetenceAssignment((current) => {
+      const next = {
+        instructorUid: current.instructorUid || firstInstructorId,
+        fichaId: current.fichaId || firstSheetId,
+        competenciaId: current.competenciaId || firstCompetenceId,
+      };
+      return next.instructorUid === current.instructorUid && next.fichaId === current.fichaId && next.competenciaId === current.competenciaId ? current : next;
+    });
+    setRapForm((current) => {
+      const nextCompetenciaId = current.competenciaId || firstCompetenceId;
+      return nextCompetenciaId === current.competenciaId ? current : { ...current, competenciaId: nextCompetenciaId };
+    });
+  }, [activeSheets[0]?.id, activeCompetences[0]?.id, instructors[0]?.id, learners[0]?.id, pasantes[0]?.id]);
+
   const selectedProgram = activePrograms.find((program) => program.id === sheetForm.programaId) || activePrograms[0];
+  const selectedLearner = learners.find((user) => user.id === learnerFicha.learnerUid);
+  const selectedLearnerSheet = activeSheets.find((sheet) => sheet.id === learnerFicha.fichaId);
   const canSaveSheet = Boolean(selectedProgram) && !isDemoRecord(selectedProgram?.id);
+
+  const runAcademicAction = async (action: () => Promise<void>, successMessage: string) => {
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      await action();
+      setFeedback(successMessage);
+    } catch (submitError: any) {
+      setFeedback(submitError?.message || 'No pudimos completar la accion.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const submitProgram = async () => {
     setSaving(true);
@@ -608,7 +777,7 @@ function AcademicTab({
     <>
       <PageTitle
         icon="school-outline"
-        subtitle="Gestion de fichas, asignaciones, competencias, RAP, proyectos y grupos"
+        subtitle="Gestión de fichas, asignaciones, competencias, RAP, proyectos y grupos"
         title="Academico"
       />
       <Section title="Programas" subtitle="Crear, listar, editar y desactivar programas">
@@ -627,6 +796,7 @@ function AcademicTab({
           <ProgramCard
             key={program.id}
             program={program}
+            onActivate={() => activarPrograma(program.id)}
             onDeactivate={() => desactivarPrograma(program.id)}
             onEdit={() => setProgramForm({ id: program.id, codigo: program.codigo || '', nombre: program.nombre || '' })}
           />
@@ -635,7 +805,7 @@ function AcademicTab({
 
       <Section title="Fichas de formacion" subtitle="Crear ficha, asociarla a programa, editar y desactivar">
         <View style={styles.formCard}>
-          <AdminField label="Numero de ficha" value={sheetForm.numero} onChangeText={(numero) => setSheetForm((current) => ({ ...current, numero }))} />
+          <AdminField label="Número de ficha" value={sheetForm.numero} onChangeText={(numero) => setSheetForm((current) => ({ ...current, numero }))} />
           <OptionPicker
             emptyLabel="Primero crea un programa"
             options={activePrograms.map((program) => ({ label: `${program.codigo || 'Programa'} - ${program.nombre || ''}`, value: program.id }))}
@@ -652,25 +822,260 @@ function AcademicTab({
             index={index}
             key={sheet.id}
             sheet={sheet}
+            onActivate={() => activarFicha(sheet.id)}
             onDeactivate={() => desactivarFicha(sheet.id)}
             onEdit={() => setSheetForm({ id: sheet.id, numero: sheet.numero || '', programaId: sheet.programaId || activePrograms[0]?.id || '' })}
           />
         ))}
       </Section>
 
-      <Section title="Competencias, RAP y proyectos" subtitle="Estructura de seguimiento para instructor y aprendiz">
-        <View style={styles.academicGrid}>
-          {academicBlocks.map((item) => (
-            <AcademicCard key={item.title} item={item} />
-          ))}
+      <Section title="Asignar usuarios a fichas" subtitle="Selecciona primero la persona y luego la ficha">
+        <View style={styles.formCard}>
+          <Text style={styles.formHint}>Aprendiz a ficha</Text>
+          <AssignmentStep number="1" text="Selecciona el aprendiz" />
+          <OptionPicker
+            emptyLabel="Primero asigna usuarios aprendiz"
+            options={learners.map((user) => ({
+              label: `${user.nombre || user.correo || user.id}${user.ficha ? ` - Actual: ${user.ficha}` : ' - Sin ficha'}`,
+              value: user.id,
+            }))}
+            value={learnerFicha.learnerUid}
+            onChange={(learnerUid) => setLearnerFicha((current) => ({ ...current, learnerUid }))}
+          />
+          <AssignmentStep number="2" text="Selecciona la ficha" />
+          <OptionPicker
+            emptyLabel="Primero crea una ficha"
+            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+            value={learnerFicha.fichaId}
+            onChange={(fichaId) => setLearnerFicha((current) => ({ ...current, fichaId }))}
+          />
+          <Text style={styles.cardText}>
+            La ficha seleccionada asignara automaticamente programa y trimestre al aprendiz.
+          </Text>
+          <AssignmentSummary
+            text={`${selectedLearner?.nombre || 'Aprendiz pendiente'} → Ficha ${selectedLearnerSheet?.numero || 'pendiente'}`}
+          />
+          <Pressable
+            disabled={saving || !selectedLearner || !selectedLearnerSheet}
+            onPress={() => runAcademicAction(
+              () => asignarAprendizAFicha({ aprendiz: selectedLearner, ficha: selectedLearnerSheet }),
+              'Aprendiz asignado a la ficha.'
+            )}
+            style={[styles.formButton, (saving || !selectedLearner || !selectedLearnerSheet) && styles.smallButtonDisabled]}>
+            <Text style={styles.formButtonText}>Asignar ficha al aprendiz</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.formCard}>
+          <Text style={styles.formHint}>Instructor a ficha</Text>
+          <AssignmentStep number="1" text="Selecciona el instructor" />
+          <OptionPicker
+            emptyLabel="Primero asigna usuarios instructor"
+            options={instructors.map((user) => ({
+              label: `${user.nombre || user.correo || user.id} - ${user.fichasAsignadas?.length || 0} ficha(s)`,
+              value: user.id,
+            }))}
+            value={instructorFicha.instructorUid}
+            onChange={(instructorUid) => setInstructorFicha((current) => ({ ...current, instructorUid }))}
+          />
+          <AssignmentStep number="2" text="Selecciona la ficha que orientara" />
+          <OptionPicker
+            emptyLabel="Primero crea una ficha"
+            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+            value={instructorFicha.fichaId}
+            onChange={(fichaId) => setInstructorFicha((current) => ({ ...current, fichaId }))}
+          />
+          <AssignmentSummary
+            text={`${instructors.find((user) => user.id === instructorFicha.instructorUid)?.nombre || 'Instructor pendiente'} → Ficha ${activeSheets.find((sheet) => sheet.id === instructorFicha.fichaId)?.numero || 'pendiente'}`}
+          />
+          <Pressable
+            disabled={saving}
+            onPress={() => runAcademicAction(
+              () => assignInstructorToFicha(instructorFicha.instructorUid, instructorFicha.fichaId),
+              'Instructor asignado a la ficha.'
+            )}
+            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            <Text style={styles.formButtonText}>Asignar instructor</Text>
+          </Pressable>
         </View>
       </Section>
 
-      <Section title="Asignaciones" subtitle="Vinculos entre fichas, aprendices, instructores y pasantes">
-        <ActionRow icon="account-multiple-plus-outline" text="Asociar aprendices a ficha, competencia o RAP" onPress={() => setFeedback('Para aprendices: usa el boton de asignar ficha en Gestion de usuarios.')} />
-        <ActionRow icon="account-school-outline" text="Asignar instructores a una o varias fichas" onPress={() => setFeedback('Asignacion de instructores lista en servicio academico; falta seleccionar instructor en esta pantalla.')} />
-        <ActionRow icon="account-tie-outline" text="Asignar pasantes a instructores y fichas" onPress={() => setFeedback('Asignacion de pasantes lista en servicio academico; falta seleccionar pasante e instructor en esta pantalla.')} />
-        <ActionRow icon="briefcase-check-outline" text="Asignar proyectos a aprendices o grupos de trabajo" onPress={() => setFeedback('Proyectos queda preparado para la siguiente fase funcional.')} />
+      <Section title="Asignar pasante" subtitle="El pasante heredara las fichas del instructor seleccionado">
+        <View style={styles.formCard}>
+          <Text style={styles.formHint}>Pasante a instructor</Text>
+          <AssignmentStep number="1" text="Selecciona el pasante" />
+          <OptionPicker
+            emptyLabel="Primero asigna usuarios pasante"
+            options={pasantes.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
+            value={pasanteInstructor.pasanteUid}
+            onChange={(pasanteUid) => setPasanteInstructor((current) => ({ ...current, pasanteUid }))}
+          />
+          <AssignmentStep number="2" text="Selecciona el instructor responsable" />
+          <OptionPicker
+            emptyLabel="Primero asigna usuarios instructor"
+            options={instructors.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
+            value={pasanteInstructor.instructorUid}
+            onChange={(instructorUid) => setPasanteInstructor((current) => ({ ...current, instructorUid }))}
+          />
+          <AssignmentSummary
+            text={`${pasantes.find((user) => user.id === pasanteInstructor.pasanteUid)?.nombre || 'Pasante pendiente'} → ${instructors.find((user) => user.id === pasanteInstructor.instructorUid)?.nombre || 'Instructor pendiente'}`}
+          />
+          <Pressable
+            disabled={saving}
+            onPress={() => runAcademicAction(
+              () => assignPasanteToInstructor(pasanteInstructor.instructorUid, pasanteInstructor.pasanteUid),
+              'Pasante asignado al instructor y sus fichas.'
+            )}
+            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            <Text style={styles.formButtonText}>Asignar pasante</Text>
+          </Pressable>
+        </View>
+      </Section>
+
+      <Section title="Resumen por ficha" subtitle="Revisa rápidamente las asignaciones guardadas">
+        {activeSheets.map((sheet) => {
+          const sheetLearners = learners.filter((user) => user.fichaId === sheet.id);
+          const sheetInstructors = instructors.filter((user) =>
+            (sheet.instructorUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
+          );
+          const sheetPasantes = pasantes.filter((user) =>
+            (sheet.pasantesUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
+          );
+
+          return (
+            <SimpleAdminCard
+              key={`summary-${sheet.id}`}
+              title={`Ficha ${sheet.numero || sheet.id} - ${sheet.trimestreActual || 'Sin trimestre'}`}
+              subtitle={`Aprendices: ${sheetLearners.map((user) => user.nombre).filter(Boolean).join(', ') || 'ninguno'} | Instructores: ${sheetInstructors.map((user) => user.nombre).filter(Boolean).join(', ') || 'ninguno'} | Pasantes: ${sheetPasantes.map((user) => user.nombre).filter(Boolean).join(', ') || 'ninguno'}`}
+            />
+          );
+        })}
+      </Section>
+
+      <Section title="Competencias y RAP" subtitle="El instructor solo puede recibir competencias que ya tengan resultados">
+        <View style={styles.formCard}>
+          <AdminField label="Codigo competencia" value={competenceForm.codigo} onChangeText={(codigo) => setCompetenceForm((current) => ({ ...current, codigo }))} />
+          <AdminField label="Nombre competencia" value={competenceForm.nombre} onChangeText={(nombre) => setCompetenceForm((current) => ({ ...current, nombre }))} />
+          <AdminField label="Descripcion" value={competenceForm.descripcion} onChangeText={(descripcion) => setCompetenceForm((current) => ({ ...current, descripcion }))} />
+          <Pressable
+            disabled={saving}
+            onPress={() => runAcademicAction(async () => {
+              await guardarCompetencia(competenceForm);
+              setCompetenceForm({ id: '', codigo: '', nombre: '', descripcion: '' });
+            }, 'Competencia guardada correctamente.')}
+            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            <Text style={styles.formButtonText}>{competenceForm.id ? 'Actualizar competencia' : 'Crear competencia'}</Text>
+          </Pressable>
+        </View>
+
+        {competences.map((competence) => (
+          <SimpleAdminCard
+            key={competence.id}
+            title={`${competence.codigo || 'COMP'} - ${competence.nombre || 'Competencia'}`}
+            subtitle={competence.descripcion || 'Sin descripcion'}
+            inactive={!isActiveRecord(competence)}
+            onActivate={() => activarCompetencia(competence.id)}
+            onDeactivate={() => desactivarCompetencia(competence.id)}
+            onEdit={() => setCompetenceForm({
+              id: competence.id,
+              codigo: competence.codigo || '',
+              nombre: competence.nombre || '',
+              descripcion: competence.descripcion || '',
+            })}
+          />
+        ))}
+
+        <View style={styles.formCard}>
+          <Text style={styles.formHint}>Resultado de aprendizaje</Text>
+          <OptionPicker
+            emptyLabel="Primero crea una competencia"
+            options={competences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
+            value={rapForm.competenciaId}
+            onChange={(competenciaId) => setRapForm((current) => ({ ...current, competenciaId }))}
+          />
+          <AdminField label="Codigo RAP" value={rapForm.codigo} onChangeText={(codigo) => setRapForm((current) => ({ ...current, codigo }))} />
+          <AdminField label="Descripcion RAP" value={rapForm.descripcion} onChangeText={(descripcion) => setRapForm((current) => ({ ...current, descripcion }))} />
+          <Pressable
+            disabled={saving}
+            onPress={() => runAcademicAction(async () => {
+              await guardarResultadoAprendizaje(rapForm);
+              setRapForm({ id: '', competenciaId: rapForm.competenciaId, codigo: '', descripcion: '' });
+            }, 'RAP guardado correctamente.')}
+            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            <Text style={styles.formButtonText}>{rapForm.id ? 'Actualizar RAP' : 'Crear RAP'}</Text>
+          </Pressable>
+        </View>
+
+        {learningResults.map((rap) => {
+          const competence = competences.find((item) => item.id === rap.competenciaId);
+          return (
+            <SimpleAdminCard
+              key={rap.id}
+              title={`${rap.codigo || 'RAP'} - ${competence?.nombre || 'Competencia'}`}
+              subtitle={rap.descripcion || 'Sin descripcion'}
+              inactive={!isActiveRecord(rap)}
+              onActivate={() => activarResultadoAprendizaje(rap.id)}
+              onDeactivate={() => desactivarResultadoAprendizaje(rap.id)}
+              onEdit={() => setRapForm({
+                id: rap.id,
+                competenciaId: rap.competenciaId || activeCompetences[0]?.id || '',
+                codigo: rap.codigo || '',
+                descripcion: rap.descripcion || '',
+              })}
+            />
+          );
+        })}
+      </Section>
+
+      <Section title="Asignar competencia" subtitle="Instructor, ficha y competencia con RAP activos">
+        <View style={styles.formCard}>
+          <AssignmentStep number="1" text="Selecciona el instructor" />
+          <OptionPicker
+            emptyLabel="Primero asigna usuarios instructor"
+            options={instructors.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
+            value={competenceAssignment.instructorUid}
+            onChange={(instructorUid) => setCompetenceAssignment((current) => ({ ...current, instructorUid }))}
+          />
+          <AssignmentStep number="2" text="Selecciona la ficha" />
+          <OptionPicker
+            emptyLabel="Primero crea una ficha"
+            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+            value={competenceAssignment.fichaId}
+            onChange={(fichaId) => setCompetenceAssignment((current) => ({ ...current, fichaId }))}
+          />
+          <AssignmentStep number="3" text="Selecciona la competencia" />
+          <OptionPicker
+            emptyLabel="Primero crea una competencia"
+            options={activeCompetences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
+            value={competenceAssignment.competenciaId}
+            onChange={(competenciaId) => setCompetenceAssignment((current) => ({ ...current, competenciaId }))}
+          />
+          <AssignmentSummary
+            text={`${instructors.find((user) => user.id === competenceAssignment.instructorUid)?.nombre || 'Instructor'} → Ficha ${activeSheets.find((sheet) => sheet.id === competenceAssignment.fichaId)?.numero || 'pendiente'} → ${activeCompetences.find((item) => item.id === competenceAssignment.competenciaId)?.nombre || 'Competencia pendiente'}`}
+          />
+          <Pressable
+            disabled={saving}
+            onPress={() => runAcademicAction(
+              () => asignarCompetenciaInstructor(competenceAssignment),
+              'Competencia asignada al instructor para la ficha.'
+            )}
+            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            <Text style={styles.formButtonText}>Asignar competencia</Text>
+          </Pressable>
+        </View>
+
+        {assignments.map((assignment) => {
+          const instructor = users.find((user) => user.id === assignment.instructorUid);
+          const sheet = sheets.find((item) => item.id === assignment.fichaId);
+          const competence = competences.find((item) => item.id === assignment.competenciaId);
+          return (
+            <SimpleAdminCard
+              key={assignment.id}
+              title={`${competence?.codigo || 'COMP'} - ${competence?.nombre || 'Competencia'}`}
+              subtitle={`${instructor?.nombre || 'Instructor'} / Ficha ${sheet?.numero || 'sin ficha'}`}
+            />
+          );
+        })}
       </Section>
     </>
   );
@@ -679,81 +1084,76 @@ function AcademicTab({
 function TrimesterTab({
   error,
   loading,
-  programs,
   sheets,
   trimesters,
 }: {
   error: string;
   loading: boolean;
-  programs: AcademicProgram[];
   sheets: AcademicSheet[];
   trimesters: AcademicTrimester[];
 }) {
-  const activePrograms = programs.filter((program) => program.estado !== 'Inactivo');
-  const activeSheets = sheets.filter((sheet) => sheet.estado !== 'Inactiva');
-  const firstProgramId = activePrograms[0]?.id || '';
+  const activeSheets = sheets.filter(isActiveRecord);
   const firstSheetId = activeSheets[0]?.id || '';
+  const activeTrimesters = trimesters.filter(isActiveRecord);
+  const firstTrimesterId = activeTrimesters[0]?.id || '';
   const [form, setForm] = useState({
     id: '',
     numero: '1',
     fechaInicio: '',
     fechaFin: '',
-    programaId: firstProgramId,
-    fichaId: firstSheetId,
   });
+  const [assignmentForm, setAssignmentForm] = useState({ fichaId: firstSheetId, trimestreId: firstTrimesterId });
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const currentTrimester = calcularTrimestreActual(trimesters);
 
   useEffect(() => {
-    setForm((current) => {
-      const nextProgramId = current.programaId || firstProgramId;
-      const nextSheetId = current.fichaId || firstSheetId;
-
-      if (nextProgramId === current.programaId && nextSheetId === current.fichaId) {
-        return current;
-      }
-
-      return {
-        ...current,
-        programaId: nextProgramId,
-        fichaId: nextSheetId,
+    setAssignmentForm((current) => {
+      const next = {
+        fichaId: current.fichaId || firstSheetId,
+        trimestreId: current.trimestreId || firstTrimesterId,
       };
+      return next.fichaId === current.fichaId && next.trimestreId === current.trimestreId ? current : next;
     });
-  }, [firstProgramId, firstSheetId]);
+  }, [firstSheetId, firstTrimesterId]);
 
-  const selectedProgram = activePrograms.find((program) => program.id === form.programaId) || activePrograms[0];
-  const selectedSheet = activeSheets.find((sheet) => sheet.id === form.fichaId) || activeSheets[0];
-  const canSaveTrimester =
-    Boolean(selectedProgram && selectedSheet) && !isDemoRecord(selectedProgram?.id) && !isDemoRecord(selectedSheet?.id);
+  const selectedSheet = activeSheets.find((sheet) => sheet.id === assignmentForm.fichaId);
+  const selectedTrimester = activeTrimesters.find((trimester) => trimester.id === assignmentForm.trimestreId);
+  const canSaveTrimester = !isDemoRecord(form.id);
 
   const submitTrimester = async () => {
     setSaving(true);
     setFeedback('');
 
     try {
-      if (!canSaveTrimester) {
-        throw new Error('Crea primero un programa y una ficha reales para asociar el trimestre.');
-      }
-
-      await guardarTrimestre({
-        ...form,
-        programaId: selectedProgram?.id || '',
-        programaNombre: selectedProgram?.nombre || selectedProgram?.codigo || '',
-        fichaId: selectedSheet?.id || '',
-        fichaNumero: selectedSheet?.numero || '',
-      });
+      await guardarTrimestre(form);
       setForm({
         id: '',
         numero: '1',
         fechaInicio: '',
         fechaFin: '',
-        programaId: selectedProgram?.id || '',
-        fichaId: selectedSheet?.id || '',
       });
       setFeedback('Trimestre guardado correctamente.');
     } catch (submitError: any) {
       setFeedback(submitError?.message || 'No pudimos guardar el trimestre.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitTrimesterAssignment = async () => {
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      if (!selectedSheet || !selectedTrimester) {
+        throw new Error('Selecciona una ficha y un trimestre activos.');
+      }
+
+      await asignarTrimestreAFicha({ fichaId: selectedSheet.id, trimestre: selectedTrimester });
+      setFeedback(`Trimestre ${selectedTrimester.numero} asignado a ficha ${selectedSheet.numero}.`);
+    } catch (submitError: any) {
+      setFeedback(submitError?.message || 'No pudimos asignar el trimestre.');
     } finally {
       setSaving(false);
     }
@@ -767,32 +1167,20 @@ function TrimesterTab({
         title="Trimestres"
       />
 
-      <Section title="Crear trimestre" subtitle="Numero, fechas, programa y ficha asociada">
+      <Section title="Crear trimestre" subtitle="Número, fecha de inicio y fecha de fin">
         {error ? <FeedbackBox icon="alert-circle-outline" text={error} tone="error" /> : null}
         {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
         <View style={styles.formCard}>
-          <AdminField label="Numero" keyboardType="numeric" value={form.numero} onChangeText={(numero) => setForm((current) => ({ ...current, numero }))} />
+          <AdminField label="Número" keyboardType="numeric" value={form.numero} onChangeText={(numero) => setForm((current) => ({ ...current, numero }))} />
           <DateField label="Fecha inicio" value={form.fechaInicio} onChange={(fechaInicio) => setForm((current) => ({ ...current, fechaInicio }))} />
           <DateField label="Fecha fin" value={form.fechaFin} onChange={(fechaFin) => setForm((current) => ({ ...current, fechaFin }))} />
-          <OptionPicker
-            emptyLabel="Primero crea un programa"
-            options={activePrograms.map((program) => ({ label: `${program.codigo || 'Programa'} - ${program.nombre || ''}`, value: program.id }))}
-            value={form.programaId}
-            onChange={(programaId) => setForm((current) => ({ ...current, programaId }))}
-          />
-          <OptionPicker
-            emptyLabel="Primero crea una ficha"
-            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
-            value={form.fichaId}
-            onChange={(fichaId) => setForm((current) => ({ ...current, fichaId }))}
-          />
           <Pressable disabled={saving || !canSaveTrimester} onPress={submitTrimester} style={[styles.formButton, (saving || !canSaveTrimester) && styles.smallButtonDisabled]}>
             {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{form.id ? 'Actualizar trimestre' : 'Crear trimestre'}</Text>}
           </Pressable>
         </View>
       </Section>
 
-      <Section title="Trimestre actual" subtitle="Calculado automaticamente segun las fechas configuradas">
+      <Section title="Trimestre actual" subtitle="Calculado segun las fechas configuradas">
         {currentTrimester ? (
           <CurrentTrimesterCard trimester={currentTrimester} />
         ) : (
@@ -800,12 +1188,38 @@ function TrimesterTab({
         )}
       </Section>
 
-      <Section title="Calendario por ficha" subtitle="El sistema calcula el trimestre desde la fecha configurada">
+      <Section title="Asignar trimestre a ficha" subtitle="La ficha comparte este dato con aprendiz, instructor y pasante">
+        <View style={styles.formCard}>
+          <AssignmentStep number="1" text="Selecciona la ficha" />
+          <OptionPicker
+            emptyLabel="Primero crea una ficha"
+            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+            value={assignmentForm.fichaId}
+            onChange={(fichaId) => setAssignmentForm((current) => ({ ...current, fichaId }))}
+          />
+          <AssignmentStep number="2" text="Selecciona el trimestre" />
+          <OptionPicker
+            emptyLabel="Primero crea un trimestre"
+            options={activeTrimesters.map((trimester) => ({ label: `Trimestre ${trimester.numero} (${trimester.fechaInicio} a ${trimester.fechaFin})`, value: trimester.id }))}
+            value={assignmentForm.trimestreId}
+            onChange={(trimestreId) => setAssignmentForm((current) => ({ ...current, trimestreId }))}
+          />
+          <AssignmentSummary
+            text={`Ficha ${selectedSheet?.numero || 'pendiente'} → Trimestre ${selectedTrimester?.numero || 'pendiente'}`}
+          />
+          <Pressable disabled={saving} onPress={submitTrimesterAssignment} style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>Asignar trimestre</Text>}
+          </Pressable>
+        </View>
+      </Section>
+
+      <Section title="Lista de trimestres" subtitle="Activa, edita o desactiva los trimestres creados">
         {loading ? <LoadingRow text="Cargando trimestres..." /> : null}
         {trimesters.map((trimester) => (
           <TrimesterCard
             key={trimester.id}
             trimester={trimester}
+            onActivate={() => activarTrimestre(trimester.id)}
             onDeactivate={() => desactivarTrimestre(trimester.id)}
             onEdit={() =>
               setForm({
@@ -813,18 +1227,23 @@ function TrimesterTab({
                 numero: String(trimester.numero || ''),
                 fechaInicio: trimester.fechaInicio || '',
                 fechaFin: trimester.fechaFin || '',
-                programaId: trimester.programaId || activePrograms[0]?.id || '',
-                fichaId: trimester.fichaId || activeSheets[0]?.id || '',
               })
             }
           />
         ))}
       </Section>
 
-      <Section title="Actualizacion automatica" subtitle="Aplicar el trimestre en perfiles y reportes academicos">
-        <ActionRow icon="calendar-plus-outline" text="Configurar fecha de inicio de ficha" onPress={() => setFeedback('Usa el formulario de Crear trimestre para registrar inicio y fin.')} />
-        <ActionRow icon="autorenew" text="Actualizar trimestre visible para aprendices, instructores y pasantes" onPress={() => setFeedback('El trimestre actual se calcula automaticamente segun las fechas configuradas.')} />
-        <ActionRow icon="bell-check-outline" text="Preparar alertas cuando una ficha cambie de trimestre" onPress={() => setFeedback('Alertas preparadas como flujo; las notificaciones se conectan en una fase posterior.')} />
+      <Section title="Fichas con trimestre" subtitle="Estado visible para los roles asignados a cada ficha">
+        {sheets.map((sheet, index) => (
+          <SheetCard
+            index={index}
+            key={sheet.id}
+            sheet={sheet}
+            onActivate={() => activarFicha(sheet.id)}
+            onDeactivate={() => desactivarFicha(sheet.id)}
+            onEdit={() => setAssignmentForm((current) => ({ ...current, fichaId: sheet.id }))}
+          />
+        ))}
       </Section>
     </>
   );
@@ -848,11 +1267,11 @@ function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
           </View>
 
           <View style={styles.profileButtonRow}>
-            <Pressable style={styles.saveProfileButton} onPress={() => alert('Perfil de administrador listo. Los datos vienen de la sesion actual.')}>
+            <Pressable style={styles.saveProfileButton} onPress={() => alert('Perfil de administrador listo. Los datos vienen de la sesión actual.')}>
               <Text style={styles.saveProfileText}>Guardar Perfil</Text>
             </Pressable>
             <Pressable onPress={onSignOut} style={styles.signOutButton}>
-              <Text style={styles.signOutText}>Cerrar Sesion</Text>
+              <Text style={styles.signOutText}>Cerrar sesión</Text>
             </Pressable>
           </View>
         </View>
@@ -996,7 +1415,7 @@ function UnverifiedUserRow({ user }: { user: AdminUser }) {
       <View style={styles.userCopy}>
         <Text style={styles.cardTitle}>{user.nombre || 'Usuario Biomind'}</Text>
         <Text style={styles.cardText}>{user.correo || 'Sin correo'}</Text>
-        <Text style={styles.cardMeta}>Esperando verificacion de correo</Text>
+        <Text style={styles.cardMeta}>Esperando verificación de correo</Text>
       </View>
     </View>
   );
@@ -1036,10 +1455,12 @@ function PermissionRow({ icon, role, text }: { icon: AdminIconName; role: string
 }
 
 function ProgramCard({
+  onActivate,
   onDeactivate,
   onEdit,
   program,
 }: {
+  onActivate: () => void;
   onDeactivate: () => void;
   onEdit: () => void;
   program: AcademicProgram;
@@ -1068,12 +1489,17 @@ function ProgramCard({
             <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
             <Text style={styles.ghostButtonText}>Editar</Text>
           </Pressable>
-          {!inactive ? (
+          {inactive ? (
+            <Pressable onPress={onActivate} style={styles.ghostButton}>
+              <MaterialCommunityIcons name="check-circle-outline" size={16} color={palette.mintText} />
+              <Text style={styles.ghostButtonText}>Activar</Text>
+            </Pressable>
+          ) : (
             <Pressable onPress={onDeactivate} style={styles.dangerButton}>
               <MaterialCommunityIcons name="cancel" size={16} color={palette.danger} />
               <Text style={styles.dangerButtonText}>Desactivar</Text>
             </Pressable>
-          ) : null}
+          )}
         </View>
       )}
     </View>
@@ -1082,11 +1508,13 @@ function ProgramCard({
 
 function SheetCard({
   index,
+  onActivate,
   onDeactivate,
   onEdit,
   sheet,
 }: {
   index: number;
+  onActivate: () => void;
   onDeactivate: () => void;
   onEdit: () => void;
   sheet: AcademicSheet;
@@ -1111,6 +1539,7 @@ function SheetCard({
       <View style={styles.assignmentBox}>
         <AssignmentLine icon="book-education-outline" label="Programa" value={sheet.programaNombre || 'Pendiente'} />
         <AssignmentLine icon="link-variant" label="Relacion" value={`${sheet.programaNombre || 'Programa'} / Ficha ${sheet.numero || ''}`} />
+        <AssignmentLine icon="calendar-check-outline" label="Trimestre" value={sheet.trimestreActual || 'Sin asignar'} />
       </View>
       {demo ? (
         <Text style={styles.demoHint}>Dato demo: crea una ficha real para administrarla.</Text>
@@ -1120,12 +1549,17 @@ function SheetCard({
             <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
             <Text style={styles.ghostButtonText}>Editar</Text>
           </Pressable>
-          {!inactive ? (
+          {inactive ? (
+            <Pressable onPress={onActivate} style={styles.ghostButton}>
+              <MaterialCommunityIcons name="check-circle-outline" size={16} color={palette.mintText} />
+              <Text style={styles.ghostButtonText}>Activar</Text>
+            </Pressable>
+          ) : (
             <Pressable onPress={onDeactivate} style={styles.dangerButton}>
               <MaterialCommunityIcons name="cancel" size={16} color={palette.danger} />
               <Text style={styles.dangerButtonText}>Desactivar</Text>
             </Pressable>
-          ) : null}
+          )}
         </View>
       )}
     </View>
@@ -1133,10 +1567,12 @@ function SheetCard({
 }
 
 function TrimesterCard({
+  onActivate,
   onDeactivate,
   onEdit,
   trimester,
 }: {
+  onActivate: () => void;
   onDeactivate: () => void;
   onEdit: () => void;
   trimester: AcademicTrimester;
@@ -1152,8 +1588,8 @@ function TrimesterCard({
             <Text style={styles.sheetNumberText}>T{trimester.numero || '?'}</Text>
           </View>
           <View>
-            <Text style={styles.sheetTitle}>Ficha {trimester.fichaNumero || 'Sin ficha'}</Text>
-            <Text style={styles.sheetProgram}>{trimester.programaNombre || 'Sin programa'}</Text>
+            <Text style={styles.sheetTitle}>Trimestre {trimester.numero || '?'}</Text>
+            <Text style={styles.sheetProgram}>Disponible para asignar a fichas</Text>
           </View>
         </View>
         <StatusPill label={inactive ? 'Inactivo' : 'Activo'} tone={inactive ? 'danger' : 'success'} />
@@ -1171,12 +1607,17 @@ function TrimesterCard({
             <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
             <Text style={styles.ghostButtonText}>Editar</Text>
           </Pressable>
-          {!inactive ? (
+          {inactive ? (
+            <Pressable onPress={onActivate} style={styles.ghostButton}>
+              <MaterialCommunityIcons name="check-circle-outline" size={16} color={palette.mintText} />
+              <Text style={styles.ghostButtonText}>Activar</Text>
+            </Pressable>
+          ) : (
             <Pressable onPress={onDeactivate} style={styles.dangerButton}>
               <MaterialCommunityIcons name="cancel" size={16} color={palette.danger} />
               <Text style={styles.dangerButtonText}>Desactivar</Text>
             </Pressable>
-          ) : null}
+          )}
         </View>
       )}
     </View>
@@ -1190,7 +1631,7 @@ function CurrentTrimesterCard({ trimester }: { trimester: AcademicTrimester }) {
       <View style={styles.userCopy}>
         <Text style={styles.cardTitle}>Trimestre {trimester.numero}</Text>
         <Text style={styles.cardText}>
-          Ficha {trimester.fichaNumero} - {trimester.programaNombre}
+          Disponible para las fichas que lo necesiten
         </Text>
         <Text style={styles.cardMeta}>
           {trimester.fechaInicio} a {trimester.fechaFin}
@@ -1205,6 +1646,74 @@ function StatusPill({ label, tone }: { label: string; tone: 'success' | 'danger'
   const backgroundColor = tone === 'success' ? palette.mint : palette.salmon;
 
   return <Text style={[styles.statusPill, { backgroundColor, color }]}>{label}</Text>;
+}
+
+function SimpleAdminCard({
+  inactive = false,
+  onActivate,
+  onDeactivate,
+  onEdit,
+  subtitle,
+  title,
+}: {
+  inactive?: boolean;
+  onActivate?: () => void;
+  onDeactivate?: () => void;
+  onEdit?: () => void;
+  subtitle: string;
+  title: string;
+}) {
+  return (
+    <View style={styles.sheetCard}>
+      <View style={styles.sheetHeader}>
+        <View style={styles.userCopy}>
+          <Text style={styles.sheetTitle}>{title}</Text>
+          <Text style={styles.sheetProgram}>{subtitle}</Text>
+        </View>
+        {onActivate || onDeactivate ? <StatusPill label={inactive ? 'Inactivo' : 'Activo'} tone={inactive ? 'danger' : 'success'} /> : null}
+      </View>
+      {onActivate || onDeactivate || onEdit ? (
+        <View style={styles.cardActions}>
+          {onEdit ? (
+            <Pressable onPress={onEdit} style={styles.ghostButton}>
+              <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
+              <Text style={styles.ghostButtonText}>Editar</Text>
+            </Pressable>
+          ) : null}
+          {inactive && onActivate ? (
+            <Pressable onPress={onActivate} style={styles.ghostButton}>
+              <MaterialCommunityIcons name="check-circle-outline" size={16} color={palette.mintText} />
+              <Text style={styles.ghostButtonText}>Activar</Text>
+            </Pressable>
+          ) : null}
+          {!inactive && onDeactivate ? (
+            <Pressable onPress={onDeactivate} style={styles.dangerButton}>
+              <MaterialCommunityIcons name="cancel" size={16} color={palette.danger} />
+              <Text style={styles.dangerButtonText}>Desactivar</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function AssignmentStep({ number, text }: { number: string; text: string }) {
+  return (
+    <View style={styles.assignmentStep}>
+      <Text style={styles.assignmentStepNumber}>{number}</Text>
+      <Text style={styles.assignmentStepText}>{text}</Text>
+    </View>
+  );
+}
+
+function AssignmentSummary({ text }: { text: string }) {
+  return (
+    <View style={styles.assignmentSummary}>
+      <MaterialCommunityIcons name="check-decagram-outline" size={18} color={palette.mintText} />
+      <Text style={styles.assignmentSummaryText}>{text}</Text>
+    </View>
+  );
 }
 
 function AdminField({
@@ -1356,6 +1865,9 @@ function OptionPicker({
           key={option.value}
           onPress={() => onChange(option.value)}
           style={[styles.optionChip, value === option.value && styles.optionChipActive]}>
+          {value === option.value ? (
+            <MaterialCommunityIcons name="check-circle" size={16} color={palette.dark} />
+          ) : null}
           <Text style={[styles.optionChipText, value === option.value && styles.optionChipTextActive]}>
             {option.label}
           </Text>
@@ -2016,6 +2528,47 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 16,
   },
+  formHint: {
+    color: palette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  assignmentStep: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  assignmentStepNumber: {
+    backgroundColor: palette.primary,
+    borderRadius: 999,
+    color: palette.surface,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 10,
+    minWidth: 24,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    textAlign: 'center',
+  },
+  assignmentStepText: {
+    color: palette.dark,
+    flex: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  assignmentSummary: {
+    alignItems: 'center',
+    backgroundColor: palette.mint,
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 8,
+    padding: 11,
+  },
+  assignmentSummaryText: {
+    color: palette.mintText,
+    flex: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 10,
+  },
   adminField: {
     gap: 6,
   },
@@ -2118,23 +2671,29 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   optionChip: {
-    backgroundColor: palette.soft,
-    borderColor: 'transparent',
-    borderRadius: 999,
+    alignItems: 'center',
+    backgroundColor: '#F6F8F6',
+    borderColor: '#DDE8E2',
+    borderRadius: 12,
     borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
     paddingHorizontal: 12,
     paddingVertical: 9,
   },
   optionChipActive: {
-    backgroundColor: palette.primary,
+    backgroundColor: palette.surface,
+    borderColor: palette.dark,
+    borderWidth: 2,
   },
   optionChipText: {
-    color: palette.primary,
-    fontFamily: 'PoppinsSemiBold',
+    color: palette.ink,
+    fontFamily: 'PoppinsMedium',
     fontSize: 11,
   },
   optionChipTextActive: {
-    color: palette.surface,
+    color: palette.dark,
+    fontFamily: 'PoppinsSemiBold',
   },
   statusPill: {
     borderRadius: 999,

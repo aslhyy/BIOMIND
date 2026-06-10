@@ -1,5 +1,6 @@
 import { ProgressBar, StatusBadge } from '@/features/instructor/components/InstructorUI';
 import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
+import { RealAcademicContext, useAssignedSheetLabels } from '@/features/workspace/components/RealAcademicContext';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { WorkspaceBottomBar, type BottomBarTab } from '@/features/workspace/components/WorkspaceBottomBar';
@@ -178,6 +179,10 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
                 : 'No tienes fichas asignadas. Pide al instructor que te asigne fichas para acceder a la aplicación.'
               }
             </Text>
+            <Pressable onPress={onSignOut} style={styles.signOutButton}>
+              <MaterialCommunityIcons name="logout" size={18} color="#FFFFFF" />
+              <Text style={styles.signOutText}>Cerrar sesión</Text>
+            </Pressable>
           </View>
         </View>
       </SafeAreaView>
@@ -198,12 +203,15 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 124 }]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
           {activeTab === 'inicio' && (
-            <PasanteHomeTab
-              projects={assignedProjects}
-              session={session}
-              tasks={assignedTasks}
-              onOpenAssistant={openAssistantForProject}
-            />
+            <>
+              <PasanteHomeTab
+                projects={assignedProjects}
+                session={session}
+                tasks={assignedTasks}
+                onOpenAssistant={openAssistantForProject}
+              />
+              <RealAcademicContext session={session} />
+            </>
           )}
           {activeTab === 'seguimiento' && (
             <PasanteTrackingTab
@@ -510,8 +518,9 @@ function PasanteProfileTab({
   const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
-  const assignedSheetsText = session.fichasAsignadas?.length
-    ? session.fichasAsignadas.join(', ')
+  const assignedSheetLabels = useAssignedSheetLabels(session);
+  const assignedSheetsText = assignedSheetLabels.length
+    ? assignedSheetLabels.join(', ')
     : 'Pendiente de asignación por instructor';
 
   useEffect(() => {
@@ -1253,10 +1262,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   signOutButton: {
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 999,
     backgroundColor: pasantePalette.coral,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
   },
   signOutText: {
     color: pasantePalette.coralText,

@@ -1,4 +1,4 @@
-import { collection, deleteDoc, doc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, deleteField, doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
 
 const USUARIOS_COLLECTION = 'usuarios';
@@ -7,11 +7,35 @@ export function escucharUsuariosAdmin(onUsers, onError) {
   return onSnapshot(
     collection(db, USUARIOS_COLLECTION),
     (snapshot) => {
+      const legacyVerificationUsers = snapshot.docs.filter((item) => {
+        const data = item.data();
+        return 'correoVerificacionEnviadaEn' in data || 'correoVerificacionConfirmadaEn' in data;
+      });
+
+      legacyVerificationUsers.forEach((item) => {
+        updateDoc(doc(db, USUARIOS_COLLECTION, item.id), {
+          correoVerificado: false,
+          correoVerificacionEnviadaEn: deleteField(),
+          correoVerificacionConfirmadaEn: deleteField(),
+          actualizadoEn: new Date(),
+        }).catch(() => {
+          // The UI still treats only boolean true as verified.
+        });
+      });
+
       const users = snapshot.docs
-        .map((item) => ({
-          id: item.id,
-          ...item.data(),
-        }))
+        .map((item) => {
+          const data = item.data();
+
+          return {
+            id: item.id,
+            ...data,
+            correoVerificado:
+              data.correoVerificado === true &&
+              !('correoVerificacionEnviadaEn' in data) &&
+              !('correoVerificacionConfirmadaEn' in data),
+          };
+        })
         .sort((a, b) => {
           const aDate = a.creadoEn?.toMillis?.() || 0;
           const bDate = b.creadoEn?.toMillis?.() || 0;

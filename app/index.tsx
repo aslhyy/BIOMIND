@@ -6,7 +6,7 @@ import { AuthScreen } from '../features/auth/components/AuthScreen';
 import { useAuth } from '../hooks/useAuth';
 
 export default function Index() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, user } = useAuth();
 
   if (loading) {
     return (
@@ -20,7 +20,9 @@ export default function Index() {
     );
   }
 
-  if (isAuthenticated) {
+  // Creating an account signs the user in immediately. Keep the auth screen
+  // mounted until verification delivery finishes and the service signs out.
+  if (isAuthenticated && user?.emailVerified) {
     return <Redirect href="/dashboard/dashboard" />;
   }
 
