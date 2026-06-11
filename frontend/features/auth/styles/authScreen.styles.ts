@@ -50,7 +50,6 @@ export const authScreenStyles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingTop: 24,
     paddingBottom: 40,
-    marginBottom: 24,
     overflow: 'hidden',
     shadowColor: '#000',
     shadowOpacity: 0.08,

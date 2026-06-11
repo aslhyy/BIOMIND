@@ -40,5 +40,9 @@ yarn-error.*
 app-example
 
 # generated native folders
-/ios
-/android
+frontend/ios/
+frontend/android/
+
+# backend secrets
+backend/.env
+backend/serviceAccountKey.json

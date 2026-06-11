@@ -1,5 +1,17 @@
 # Biomind
 
+El repositorio esta separado en dos areas:
+
+- `frontend/`: aplicacion Expo/React Native, componentes, servicios cliente y assets.
+- `backend/`: configuracion de Firebase CLI y reglas de seguridad de Firestore.
+
+Los comandos de Expo y npm se ejecutan desde `frontend/`. Los comandos de
+Firebase se ejecutan desde `backend/`.
+
+Importante: `frontend/services/` contiene adaptadores cliente usados
+directamente por Expo; no es codigo servidor. El backend real existente esta
+en `backend/` y actualmente consiste en la configuracion y reglas de Firebase.
+
 Biomind es una aplicación móvil y web hecha con Expo, React Native, Firebase Authentication y Firestore. Su objetivo es acompañar procesos de biotecnología vegetal del SENA para tres tipos de usuario:
 
 - Aprendiz: registra avances, revisa proyectos, bitácoras, evidencias y recibe apoyo de IA.
