@@ -29,12 +29,36 @@ export function mapAuthErrorToAlert(error: any): ShowAuthAlertInput {
         title: 'Correo ya registrado',
         message: 'Ese correo ya tiene una cuenta en Biomind.',
       };
+    case 'auth/missing-photo':
+      return {
+        variant: 'warning',
+        title: 'Falta la foto',
+        message: 'Selecciona una foto de perfil antes de registrarte.',
+      };
+    case 'auth/missing-identification':
+      return {
+        variant: 'warning',
+        title: 'Falta la identificación',
+        message: 'Ingresa tu número de identificación.',
+      };
+    case 'auth/invalid-identification':
+      return {
+        variant: 'warning',
+        title: 'Identificación inválida',
+        message: 'La identificación solo debe contener números.',
+      };
+    case 'auth/identification-already-in-use':
+      return {
+        variant: 'warning',
+        title: 'Identificación ya registrada',
+        message: 'Ese número de identificación ya pertenece a otra cuenta.',
+      };
     case 'auth/orphan-auth-account':
       return {
         variant: 'warning',
         title: 'Correo aún en Auth',
         message:
-          'Ese correo fue borrado de Firestore, pero sigue existiendo en Firebase Auth. Usa la contraseña anterior o elimina también la cuenta desde Authentication.',
+          'Ese correo fue borrado de Firestore, pero sigue existiendo en Firebase Auth. Elimínalo también desde Authentication.',
       };
     case 'auth/invalid-email':
       return {

@@ -68,11 +68,20 @@ export function LoginForm({
     const correo = getNormalizedEmail();
     const contrasena = form.contrasena;
 
-    if (!correo || !contrasena) {
+    if (!correo) {
       showAlert({
         variant: 'warning',
-        title: 'Faltan datos',
-        message: 'Completa correo y contraseña para iniciar sesión.',
+        title: 'Falta el correo',
+        message: 'Ingresa tu correo electrónico para iniciar sesión.',
+      });
+      return;
+    }
+
+    if (!contrasena) {
+      showAlert({
+        variant: 'warning',
+        title: 'Falta la contraseña',
+        message: 'Ingresa tu contraseña para iniciar sesión.',
       });
       return;
     }
@@ -154,7 +163,10 @@ export function LoginForm({
   };
 
   return (
-    <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      contentContainerStyle={{ paddingBottom: 36 }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}>
       <Pressable onPress={onBack} style={loginStyles.backRow}>
         <Ionicons name="arrow-back-outline" size={20} color="#2FC4B1" />
         <Text style={loginStyles.backText}>Volver</Text>

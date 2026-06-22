@@ -1,7 +1,9 @@
 import { useFonts } from 'expo-font';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Animated as RNAnimated, Dimensions, Easing, View } from 'react-native';
+import { Animated as RNAnimated, Dimensions, Easing, KeyboardAvoidingView, Platform, View } from 'react-native';
+import InicioIllustration from '../../../assets/images/inicio.svg';
+import IngresoIllustration from '../../../assets/images/ingreso.svg';
 import { authScreenStyles } from '../styles/authScreen.styles';
 import type {
   AuthAlert,
@@ -237,16 +239,12 @@ export function AuthScreen() {
     <View style={authScreenStyles.container}>
       <AuthAlertStack alerts={alerts} onDismiss={dismissAlert} />
 
-      <RNAnimated.Image
-        source={require('../../../assets/images/inicio.png')}
-        style={[authScreenStyles.imageI, { width, height: height * 0.85, opacity: imageIOpacity }]}
-        resizeMode="cover"
-      />
-      <RNAnimated.Image
-        source={require('../../../assets/images/ingreso.png')}
-        style={[authScreenStyles.imageS, { width, height: height * 0.49, opacity: imageSOpacity }]}
-        resizeMode="cover"
-      />
+      <RNAnimated.View style={[authScreenStyles.imageI, { width, height: height * 0.85, opacity: imageIOpacity }]}>
+        <InicioIllustration width="100%" height="100%" preserveAspectRatio="xMidYMid slice" />
+      </RNAnimated.View>
+      <RNAnimated.View style={[authScreenStyles.imageS, { width, height: height * 0.59, opacity: imageSOpacity }]}>
+        <IngresoIllustration width="100%" height="100%" preserveAspectRatio="xMidYMid slice" />
+      </RNAnimated.View>
       <RNAnimated.Text
         style={[
           authScreenStyles.logoText,
@@ -258,14 +256,18 @@ export function AuthScreen() {
         BIOMIND
       </RNAnimated.Text>
 
-      <RNAnimated.View
-        style={[
-          authScreenStyles.panelWrapper,
-          {
-            opacity: panelOpacity,
-            transform: [{ translateY: panelTranslateY }],
-          },
-        ]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+        style={authScreenStyles.keyboardAvoider}>
+        <RNAnimated.View
+          style={[
+            authScreenStyles.panelWrapper,
+            {
+              opacity: panelOpacity,
+              transform: [{ translateY: panelTranslateY }],
+            },
+          ]}>
         <RNAnimated.View style={[authScreenStyles.card, { height: cardHeight }]}>
           {vista === 'bienvenida' && (
             <WelcomeView
@@ -308,6 +310,7 @@ export function AuthScreen() {
           )}
         </RNAnimated.View>
       </RNAnimated.View>
+      </KeyboardAvoidingView>
     </View>
   );
 }

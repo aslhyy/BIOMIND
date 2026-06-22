@@ -562,6 +562,11 @@ function PasanteProfileTab({
   };
 
   const handleSaveProfile = async () => {
+    if (!name.trim()) {
+      setFeedback('Falta el nombre. Ingresa tu nombre antes de guardar el perfil.');
+      return;
+    }
+
     setSaving(true);
     setFeedback('');
 

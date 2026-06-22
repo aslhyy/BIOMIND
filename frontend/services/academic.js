@@ -3,6 +3,7 @@ import {
   arrayRemove,
   arrayUnion,
   collection,
+  deleteField,
   doc,
   getDocs,
   onSnapshot,
@@ -22,6 +23,8 @@ const USUARIOS_COLLECTION = 'usuarios';
 const COMPETENCIAS_COLLECTION = 'competencias';
 const RESULTADOS_COLLECTION = 'resultadosAprendizaje';
 const ASIGNACIONES_COMPETENCIAS_COLLECTION = 'asignacionesCompetencias';
+const PROYECTOS_COLLECTION = 'proyectos';
+const GRUPOS_COLLECTION = 'gruposTrabajo';
 
 function now() {
   return new Date();
@@ -50,6 +53,23 @@ function mapSnapshot(snapshot) {
 
 function isActive(record) {
   return record.activo !== false && record.estado !== 'Inactivo' && record.estado !== 'Inactiva';
+}
+
+function getAssignedSheetValues(session) {
+  return [
+    session?.ficha,
+    session?.fichaId,
+    ...(Array.isArray(session?.fichasAsignadas) ? session.fichasAsignadas : []),
+  ]
+    .map((value) => cleanText(value))
+    .filter(Boolean);
+}
+
+function sessionMatchesSheet(session, ficha) {
+  const assignedValues = new Set(getAssignedSheetValues(session));
+  const sheetValues = [ficha?.id, ficha?.numero].map((value) => cleanText(value)).filter(Boolean);
+
+  return sheetValues.some((value) => assignedValues.has(value));
 }
 
 export function calcularTrimestreActual(trimestres, referenceDate = new Date()) {
@@ -113,6 +133,22 @@ export function escucharAsignacionesCompetencias(onData, onError) {
   );
 }
 
+export function escucharProyectos(onData, onError) {
+  return onSnapshot(
+    query(collection(db, PROYECTOS_COLLECTION), orderBy('creadoEn', 'desc')),
+    (snapshot) => onData(mapSnapshot(snapshot)),
+    onError
+  );
+}
+
+export function escucharGruposTrabajo(onData, onError) {
+  return onSnapshot(
+    query(collection(db, GRUPOS_COLLECTION), orderBy('creadoEn', 'desc')),
+    (snapshot) => onData(mapSnapshot(snapshot)),
+    onError
+  );
+}
+
 export function escucharContextoAcademicoUsuario(session, onData, onError) {
   const state = {
     fichas: [],
@@ -124,19 +160,18 @@ export function escucharContextoAcademicoUsuario(session, onData, onError) {
 
   const emit = () => {
     const role = cleanText(session?.role).toLowerCase();
-    const assignedIds = new Set((session?.fichasAsignadas || []).map(String));
 
     const fichas = state.fichas.filter((ficha) => {
       if (role === 'aprendiz') {
-        return ficha.id === session?.fichaId || ficha.numero === session?.ficha;
+        return sessionMatchesSheet(session, ficha);
       }
 
       if (role === 'instructor') {
-        return assignedIds.has(ficha.id) || (ficha.instructorUids || []).includes(session?.uid);
+        return sessionMatchesSheet(session, ficha) || (ficha.instructorUids || []).includes(session?.uid);
       }
 
       if (role === 'pasante') {
-        return assignedIds.has(ficha.id) || (ficha.pasantesUids || []).includes(session?.uid);
+        return sessionMatchesSheet(session, ficha) || (ficha.pasantesUids || []).includes(session?.uid);
       }
 
       return false;
@@ -225,15 +260,17 @@ export async function crearDatosAcademicosIniciales() {
 export async function guardarPrograma(programa) {
   const nombre = cleanText(programa.nombre);
   const codigo = cleanText(programa.codigo).toUpperCase();
+  const tipoFormacion = cleanText(programa.tipoFormacion);
   const cantidadTrimestres = programa.cantidadTrimestres ? Number(programa.cantidadTrimestres) : undefined;
 
   if (!nombre || !codigo) {
-    throw new Error('Completa nombre y codigo del programa.');
+    throw new Error('Completa nombre y código del programa.');
   }
 
   const payload = {
     nombre,
     codigo,
+    tipoFormacion: tipoFormacion || 'Tecnólogo',
     ...(typeof cantidadTrimestres === 'number' ? { cantidadTrimestres } : {}),
     activo: programa.activo ?? true,
     estado: programa.estado || 'Activo',
@@ -273,7 +310,11 @@ export async function guardarFicha(ficha) {
   const programaNombre = cleanText(ficha.programaNombre);
 
   if (!numero || !programaId) {
-    throw new Error('Completa numero de ficha y programa.');
+    throw new Error('Completa número de ficha y programa.');
+  }
+
+  if (!/^\d+$/.test(numero)) {
+    throw new Error('El número de ficha solo debe contener dígitos.');
   }
 
   const existingQuery = query(
@@ -285,7 +326,7 @@ export async function guardarFicha(ficha) {
   const conflict = existing.docs.find((item) => item.id !== ficha.id);
 
   if (conflict) {
-    throw new Error('Ya existe una ficha con ese numero en el programa.');
+    throw new Error('Ya existe una ficha con ese número en el programa.');
   }
 
   const payload = {
@@ -325,12 +366,12 @@ export async function activarFicha(id) {
 }
 
 export async function guardarTrimestre(trimestre) {
-  const numero = Number(trimestre.numero);
+  const numero = trimestre.numero ? Number(trimestre.numero) : null;
   const fechaInicio = normalizeDate(trimestre.fechaInicio);
   const fechaFin = normalizeDate(trimestre.fechaFin);
 
-  if (!numero || numero < 1) {
-    throw new Error('Completa el numero del trimestre.');
+  if (trimestre.numero && (!numero || numero < 1)) {
+    throw new Error('Completa el número del trimestre.');
   }
 
   if (new Date(`${fechaInicio}T00:00:00`) > new Date(`${fechaFin}T00:00:00`)) {
@@ -427,6 +468,25 @@ export async function asignarAprendizAFicha({ aprendiz, ficha }) {
   });
 }
 
+export async function quitarAprendizDeFicha(aprendizUid) {
+  if (!aprendizUid) {
+    throw new Error('Selecciona un aprendiz valido.');
+  }
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, aprendizUid), {
+    fichaId: null,
+    ficha: null,
+    programaId: null,
+    programa: null,
+    trimestreActual: null,
+    trimestreId: null,
+    trimestreNumero: null,
+    trimestreFechaInicio: null,
+    trimestreFechaFin: null,
+    actualizadoEn: now(),
+  });
+}
+
 export async function assignInstructorToFicha(instructorUid, fichaId) {
   if (!instructorUid || !fichaId) {
     throw new Error('Instructor y ficha son requeridos.');
@@ -503,6 +563,108 @@ export async function removePasanteFromFicha(pasanteUid, fichaId) {
   });
 }
 
+export async function removePasanteFromInstructor(instructorUid, pasanteUid) {
+  if (!instructorUid || !pasanteUid) {
+    throw new Error('Instructor y pasante son requeridos.');
+  }
+
+  const fichasQuery = query(collection(db, FICHAS_COLLECTION), where('instructorUids', 'array-contains', instructorUid));
+  const snapshot = await getDocs(fichasQuery);
+  const fichaIds = snapshot.docs.map((item) => item.id);
+  const batch = writeBatch(db);
+
+  batch.update(doc(db, USUARIOS_COLLECTION, pasanteUid), {
+    instructorUid: deleteField(),
+    fichasAsignadas: [],
+    actualizadoEn: now(),
+  });
+  batch.update(doc(db, USUARIOS_COLLECTION, instructorUid), {
+    pasantesUids: arrayRemove(pasanteUid),
+    actualizadoEn: now(),
+  });
+
+  fichaIds.forEach((fichaId) => {
+    batch.update(doc(db, FICHAS_COLLECTION, fichaId), {
+      pasantesUids: arrayRemove(pasanteUid),
+      actualizadoEn: now(),
+    });
+  });
+
+  await batch.commit();
+}
+
+export async function asignarTrimestreDirectoAFicha({ fichaId, numero, fechaInicio, fechaFin }) {
+  if (!fichaId) {
+    throw new Error('Selecciona una ficha.');
+  }
+
+  const trimesterNumber = Number(numero);
+  const normalizedStart = normalizeDate(fechaInicio);
+  const normalizedEnd = normalizeDate(fechaFin);
+
+  if (!trimesterNumber || trimesterNumber < 1) {
+    throw new Error('Ingresa un número de trimestre válido.');
+  }
+
+  if (new Date(`${normalizedStart}T00:00:00`) > new Date(`${normalizedEnd}T00:00:00`)) {
+    throw new Error('La fecha de inicio no puede ser posterior a la fecha fin.');
+  }
+
+  const trimesterPayload = {
+    trimestreId: null,
+    trimestreActual: `Trimestre ${trimesterNumber}`,
+    trimestreNumero: trimesterNumber,
+    trimestreFechaInicio: normalizedStart,
+    trimestreFechaFin: normalizedEnd,
+    actualizadoEn: now(),
+  };
+
+  const batch = writeBatch(db);
+  batch.update(doc(db, FICHAS_COLLECTION, fichaId), trimesterPayload);
+
+  const learnersSnapshot = await getDocs(query(collection(db, USUARIOS_COLLECTION), where('fichaId', '==', fichaId)));
+  learnersSnapshot.docs.forEach((item) => {
+    batch.update(doc(db, USUARIOS_COLLECTION, item.id), trimesterPayload);
+  });
+
+  const assignedUsersSnapshot = await getDocs(query(collection(db, USUARIOS_COLLECTION), where('fichasAsignadas', 'array-contains', fichaId)));
+  assignedUsersSnapshot.docs.forEach((item) => {
+    batch.update(doc(db, USUARIOS_COLLECTION, item.id), trimesterPayload);
+  });
+
+  await batch.commit();
+}
+
+export async function quitarTrimestreDeFicha(fichaId) {
+  if (!fichaId) {
+    throw new Error('Selecciona una ficha.');
+  }
+
+  const trimesterPayload = {
+    trimestreId: null,
+    trimestreActual: null,
+    trimestreNumero: null,
+    trimestreFechaInicio: null,
+    trimestreFechaFin: null,
+    actualizadoEn: now(),
+  };
+
+  const batch = writeBatch(db);
+  batch.update(doc(db, FICHAS_COLLECTION, fichaId), trimesterPayload);
+
+  const learnersSnapshot = await getDocs(query(collection(db, USUARIOS_COLLECTION), where('fichaId', '==', fichaId)));
+  learnersSnapshot.docs.forEach((item) => {
+    batch.update(doc(db, USUARIOS_COLLECTION, item.id), trimesterPayload);
+  });
+
+  const assignedUsersSnapshot = await getDocs(query(collection(db, USUARIOS_COLLECTION), where('fichasAsignadas', 'array-contains', fichaId)));
+  assignedUsersSnapshot.docs.forEach((item) => {
+    batch.update(doc(db, USUARIOS_COLLECTION, item.id), trimesterPayload);
+  });
+
+  await batch.commit();
+}
+
 export function subscribePasanteFichas(pasanteUid, onData, onError) {
   if (!pasanteUid) {
     throw new Error('PasanteUid es requerido para suscribirse a fichas.');
@@ -549,7 +711,7 @@ export async function guardarCompetencia(competencia) {
   const descripcion = cleanText(competencia.descripcion);
 
   if (!codigo || !nombre) {
-    throw new Error('Completa codigo y nombre de la competencia.');
+    throw new Error('Completa código y nombre de la competencia.');
   }
 
   const payload = {
@@ -594,7 +756,7 @@ export async function guardarResultadoAprendizaje(resultado) {
   const descripcion = cleanText(resultado.descripcion);
 
   if (!competenciaId || !codigo || !descripcion) {
-    throw new Error('Selecciona competencia y completa codigo y descripcion del RAP.');
+    throw new Error('Selecciona competencia y completa código y descripción del RAP.');
   }
 
   const payload = {
@@ -657,4 +819,155 @@ export async function asignarCompetenciaInstructor({ instructorUid, fichaId, com
     creadoEn: now(),
     actualizadoEn: now(),
   });
+}
+
+export async function desactivarAsignacionCompetencia(id) {
+  if (!id) {
+    throw new Error('Selecciona una asignacion valida.');
+  }
+
+  await updateDoc(doc(db, ASIGNACIONES_COMPETENCIAS_COLLECTION, id), {
+    activo: false,
+    estado: 'Inactiva',
+    actualizadoEn: now(),
+  });
+}
+
+export async function guardarGrupoTrabajo(grupo) {
+  const nombre = cleanText(grupo.nombre);
+  const fichaId = cleanText(grupo.fichaId);
+  const fichaNumero = cleanText(grupo.fichaNumero);
+  const instructorUid = cleanText(grupo.instructorUid);
+  const aprendizIds = Array.isArray(grupo.aprendizIds) ? grupo.aprendizIds.filter(Boolean) : [];
+
+  if (!nombre) {
+    throw new Error('Falta el nombre del grupo.');
+  }
+
+  if (!fichaId) {
+    throw new Error('Selecciona una ficha para el grupo.');
+  }
+
+  if (!instructorUid) {
+    throw new Error('No encontramos el instructor responsable.');
+  }
+
+  const payload = {
+    nombre,
+    fichaId,
+    fichaNumero,
+    instructorUid,
+    aprendizIds,
+    activo: grupo.activo ?? true,
+    estado: grupo.estado || 'Activo',
+    actualizadoEn: now(),
+  };
+
+  if (grupo.id) {
+    await updateDoc(doc(db, GRUPOS_COLLECTION, grupo.id), payload);
+    return;
+  }
+
+  await addDoc(collection(db, GRUPOS_COLLECTION), {
+    ...payload,
+    creadoEn: now(),
+  });
+}
+
+export async function quitarIntegranteGrupo(grupoId, aprendizUid) {
+  if (!grupoId || !aprendizUid) {
+    throw new Error('Selecciona un grupo y un aprendiz.');
+  }
+
+  await updateDoc(doc(db, GRUPOS_COLLECTION, grupoId), {
+    aprendizIds: arrayRemove(aprendizUid),
+    actualizadoEn: now(),
+  });
+}
+
+export async function guardarProyectoAcademico(proyecto) {
+  const titulo = cleanText(proyecto.titulo);
+  const descripcion = cleanText(proyecto.descripcion);
+  const fichaId = cleanText(proyecto.fichaId);
+  const fichaNumero = cleanText(proyecto.fichaNumero);
+  const competenciaId = cleanText(proyecto.competenciaId);
+  const competenciaNombre = cleanText(proyecto.competenciaNombre);
+  const rapId = cleanText(proyecto.rapId);
+  const rapDescripcion = cleanText(proyecto.rapDescripcion);
+  const instructorUid = cleanText(proyecto.instructorUid);
+  const asignacionTipo = proyecto.asignacionTipo === 'grupo' ? 'grupo' : 'aprendices';
+  const aprendizIds = Array.isArray(proyecto.aprendizIds) ? proyecto.aprendizIds.filter(Boolean) : [];
+  const grupoId = cleanText(proyecto.grupoId);
+  const archivoNombre = cleanText(proyecto.archivoNombre);
+  const archivoUri = cleanText(proyecto.archivoUri);
+  const archivoMimeType = cleanText(proyecto.archivoMimeType);
+
+  if (!titulo) {
+    throw new Error('Falta el nombre del proyecto.');
+  }
+
+  if (!fichaId || !competenciaId || !rapId) {
+    throw new Error('Selecciona ficha, competencia y RAP.');
+  }
+
+  if (!instructorUid) {
+    throw new Error('No encontramos el instructor responsable.');
+  }
+
+  if (asignacionTipo === 'grupo' && !grupoId) {
+    throw new Error('Selecciona el grupo de trabajo.');
+  }
+
+  if (asignacionTipo === 'aprendices' && !aprendizIds.length) {
+    throw new Error('Selecciona al menos un aprendiz.');
+  }
+
+  const payload = {
+    titulo,
+    descripcion,
+    fichaId,
+    fichaNumero,
+    competenciaId,
+    competenciaNombre,
+    rapId,
+    rapDescripcion,
+    instructorUid,
+    asignacionTipo,
+    aprendizIds: asignacionTipo === 'aprendices' ? aprendizIds : [],
+    grupoId: asignacionTipo === 'grupo' ? grupoId : null,
+    archivoNombre: archivoNombre || null,
+    archivoUri: archivoUri || null,
+    archivoMimeType: archivoMimeType || null,
+    estado: proyecto.estado || 'Pendiente',
+    progreso: Number(proyecto.progreso || 0),
+    activo: proyecto.activo ?? true,
+    actualizadoEn: now(),
+  };
+
+  if (proyecto.id) {
+    await updateDoc(doc(db, PROYECTOS_COLLECTION, proyecto.id), payload);
+    return;
+  }
+
+  await addDoc(collection(db, PROYECTOS_COLLECTION), {
+    ...payload,
+    creadoEn: now(),
+  });
+}
+
+export async function cambiarEstadoProyecto(proyectoId, estado) {
+  const normalizedState = cleanText(estado);
+  const allowedStates = ['Pendiente', 'En proceso', 'Aprobado', 'Desaprobado'];
+
+  if (!proyectoId || !allowedStates.includes(normalizedState)) {
+    throw new Error('Selecciona un proyecto y un estado valido.');
+  }
+
+  const payload = {
+    estado: normalizedState,
+    progreso: normalizedState === 'Aprobado' ? 100 : normalizedState === 'En proceso' ? 50 : 0,
+    actualizadoEn: now(),
+  };
+
+  await updateDoc(doc(db, PROYECTOS_COLLECTION, proyectoId), payload);
 }

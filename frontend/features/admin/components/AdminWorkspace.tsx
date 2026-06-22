@@ -1,4 +1,4 @@
-import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+﻿import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import {
@@ -6,18 +6,16 @@ import {
   activarFicha,
   activarPrograma,
   activarResultadoAprendizaje,
-  activarTrimestre,
+  asignarTrimestreAFicha,
   asignarAprendizAFicha,
   asignarCompetenciaInstructor,
-  asignarTrimestreAFicha,
   assignInstructorToFicha,
   assignPasanteToInstructor,
-  calcularTrimestreActual,
+  desactivarAsignacionCompetencia,
   desactivarCompetencia,
   desactivarFicha,
   desactivarPrograma,
   desactivarResultadoAprendizaje,
-  desactivarTrimestre,
   escucharAsignacionesCompetencias,
   escucharCompetencias,
   escucharFichas,
@@ -29,9 +27,16 @@ import {
   guardarPrograma,
   guardarResultadoAprendizaje,
   guardarTrimestre,
+  quitarAprendizDeFicha,
+  quitarTrimestreDeFicha,
+  removeInstructorFromFicha,
+  removePasanteFromFicha,
+  removePasanteFromInstructor,
 } from '@/services/academic';
 import { asignarRolUsuario, eliminarUsuarioAdmin, escucharUsuariosAdmin, suspenderUsuarioAdmin } from '@/services/adminUsers';
+import { actualizarPerfilUsuario } from '@/services/auth';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import type { ComponentProps, ReactNode } from 'react';
@@ -41,9 +46,18 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 type AdminTab = 'inicio' | 'usuarios' | 'academico' | 'trimestres' | 'perfil';
 type AdminIconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
+type AcademicSectionId =
+  | 'programas'
+  | 'fichas'
+  | 'usuarios-fichas'
+  | 'pasantes'
+  | 'resumen'
+  | 'competencias'
+  | 'asignar-competencia';
 
 const palette = {
   background: '#F4F4F4',
+  shadow: '#E7C6B8',
   border: '#EFE7DC',
   dark: '#2F4736',
   ink: '#5D5A51',
@@ -65,6 +79,10 @@ const palette = {
   greenText: '#7BC57D',
   salmon: '#FFE1D6',
   salmonText: '#F08A6A',
+  // nuevos, solo para Académico:
+  academicInk: '#1F3A2E',
+  academicLine: '#E7E0D2',
+  academicChipBg: '#FBF7EF',
 };
 
 const tabs: BottomBarTab[] = [
@@ -95,6 +113,8 @@ type AdminUser = {
   ficha?: string | null;
   estado?: string;
   fichasAsignadas?: string[];
+  instructorUid?: string | null;
+  pasantesUids?: string[];
   trimestreActual?: string | null;
 };
 
@@ -102,6 +122,7 @@ type AcademicProgram = {
   id: string;
   codigo?: string;
   nombre?: string;
+  tipoFormacion?: string;
   activo?: boolean;
   estado?: string;
 };
@@ -194,6 +215,17 @@ const adminFlows = [
 ] as { label: string; icon: AdminIconName; done: number }[];
 
 const roleOptions = ['Aprendiz', 'Instructor', 'Pasante', 'Administrador'];
+const formationTypeOptions = ['Tecnólogo', 'Técnico', 'Curso corto'];
+
+const academicSectionOptions: { id: AcademicSectionId; label: string; icon: AdminIconName }[] = [
+  { id: 'programas', label: 'Programas', icon: 'book-education-outline' },
+  { id: 'fichas', label: 'Fichas', icon: 'folder-cog-outline' },
+  { id: 'usuarios-fichas', label: 'Usuarios a fichas', icon: 'account-multiple-plus-outline' },
+  { id: 'pasantes', label: 'Pasantes', icon: 'account-tie-outline' },
+  { id: 'resumen', label: 'Resumen', icon: 'format-list-bulleted' },
+  { id: 'competencias', label: 'Competencias y RAP', icon: 'certificate-outline' },
+  { id: 'asignar-competencia', label: 'Asignar competencia', icon: 'source-branch' },
+];
 
 type AdminWorkspaceProps = {
   session: AuthenticatedSession;
@@ -354,7 +386,7 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
       <View style={styles.screen}>
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 124 }]}>
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 160 }]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
           {activeTab === 'inicio' && <AdminHome counts={counts} onOpenTab={setActiveTab} />}
           {activeTab === 'usuarios' && (
@@ -488,7 +520,7 @@ function AdminHome({
           />
           <QuickAction
             icon="book-education-outline"
-            label="Academico"
+            label="Académico"
             text="Fichas, competencias, RAP, grupos y proyectos"
             onPress={() => onOpenTab('academico')}
           />
@@ -516,13 +548,16 @@ function AdminHome({
             { label: 'Pasantes', icon: 'account-tie-outline' as AdminIconName, done: counts.pasantes },
             { label: 'Competencias asignadas', icon: 'source-branch' as AdminIconName, done: counts.competenceAssignments },
             { label: 'Usuarios totales', icon: 'account-group-outline' as AdminIconName, done: counts.totalUsers },
-          ].map((flow) => (
-            <View key={flow.label} style={styles.flowCard}>
-              <MaterialCommunityIcons name={flow.icon} size={20} color={palette.primary} />
-              <Text style={styles.flowNumber}>{flow.done}</Text>
-              <Text style={styles.flowText}>{flow.label}</Text>
-            </View>
-          ))}
+          ].map((flow) => {
+            const isEmpty = flow.done === 0;
+            return (
+              <View key={flow.label} style={[styles.flowCard, isEmpty && styles.flowCardEmpty]}>
+                <MaterialCommunityIcons name={flow.icon} size={20} color={isEmpty ? palette.muted : palette.primary} />
+                <Text style={[styles.flowNumber, isEmpty && styles.flowNumberEmpty]}>{flow.done}</Text>
+                <Text style={styles.flowText}>{flow.label}</Text>
+              </View>
+            );
+          })}
         </View>
       </Section>
     </>
@@ -546,8 +581,19 @@ function UsersTab({
   onAssignRole: (uid: string, role: string) => void;
   onRoleChange: (role: string) => void;
 }) {
-  const verifiedUsers = users.filter(hasVerifiedEmail);
-  const unverifiedUsers = users.filter((user) => !hasVerifiedEmail(user));
+  const [userSearch, setUserSearch] = useState('');
+  const normalizeUser = (user: AdminUser) =>
+    `${user.nombre || ''} ${user.correo || ''} ${user.identificacion || ''} ${user.rol || ''}`.toLowerCase();
+  const sortUsers = (nextUsers: AdminUser[]) =>
+    [...nextUsers].sort((a, b) =>
+      (a.nombre || a.correo || '').localeCompare(b.nombre || b.correo || '', 'es', {
+        numeric: true,
+        sensitivity: 'base',
+      })
+    );
+  const filteredUsers = users.filter((user) => normalizeUser(user).includes(userSearch.trim().toLowerCase()));
+  const verifiedUsers = sortUsers(filteredUsers.filter(hasVerifiedEmail));
+  const unverifiedUsers = sortUsers(filteredUsers.filter((user) => !hasVerifiedEmail(user)));
 
   return (
     <>
@@ -557,7 +603,14 @@ function UsersTab({
         title="Usuarios"
       />
 
-      <Section title="Asignar rol" subtitle="Solo aparecen para asignación los usuarios con correo verificado">
+      <Section title="Asignar rol" subtitle="Solo aparecen para asignación los usuarios con correo verificado"
+      >
+        <SearchField
+          placeholder="Buscar por nombre, correo, identificación o rol..."
+          value={userSearch}
+          onChangeText={setUserSearch}
+        />
+
         <View style={styles.segmented}>
           {roleOptions.map((role) => (
             <Pressable
@@ -657,14 +710,22 @@ function AcademicTab({
   const pasantes = users.filter((user) => String(user.rol || '').toLowerCase() === 'pasante' && user.estado !== 'suspendido');
   const activeCompetences = competences.filter(isActiveRecord);
   const firstProgramId = activePrograms[0]?.id || '';
-  const [programForm, setProgramForm] = useState({ id: '', codigo: '', nombre: '' });
-  const [sheetForm, setSheetForm] = useState({ id: '', numero: '', programaId: firstProgramId });
+  const [activeAcademicSection, setActiveAcademicSection] = useState<AcademicSectionId>('programas');
+  const [programForm, setProgramForm] = useState({ id: '', codigo: '', nombre: '', tipoFormacion: formationTypeOptions[0], activo: true, estado: 'Activo' });
+  const [sheetForm, setSheetForm] = useState({ id: '', numero: '', programaId: firstProgramId, activo: true, estado: 'Activa' });
   const [competenceForm, setCompetenceForm] = useState({ id: '', codigo: '', nombre: '', descripcion: '' });
   const [rapForm, setRapForm] = useState({ id: '', competenciaId: '', codigo: '', descripcion: '' });
   const [learnerFicha, setLearnerFicha] = useState({ learnerUid: '', fichaId: '' });
   const [instructorFicha, setInstructorFicha] = useState({ instructorUid: '', fichaId: '' });
   const [pasanteInstructor, setPasanteInstructor] = useState({ pasanteUid: '', instructorUid: '' });
   const [competenceAssignment, setCompetenceAssignment] = useState({ instructorUid: '', fichaId: '', competenciaId: '' });
+  const [summarySheetId, setSummarySheetId] = useState('');
+  const [programSearch, setProgramSearch] = useState('');
+  const [sheetSearch, setSheetSearch] = useState('');
+  const [pasanteSearch, setPasanteSearch] = useState('');
+  const [competenceSearch, setCompetenceSearch] = useState('');
+  const [rapSearch, setRapSearch] = useState('');
+  const [assignmentSearch, setAssignmentSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
 
@@ -714,12 +775,42 @@ function AcademicTab({
       const nextCompetenciaId = current.competenciaId || firstCompetenceId;
       return nextCompetenciaId === current.competenciaId ? current : { ...current, competenciaId: nextCompetenciaId };
     });
+    setSummarySheetId((current) => current || firstSheetId);
   }, [activeSheets[0]?.id, activeCompetences[0]?.id, instructors[0]?.id, learners[0]?.id, pasantes[0]?.id]);
 
   const selectedProgram = activePrograms.find((program) => program.id === sheetForm.programaId) || activePrograms[0];
   const selectedLearner = learners.find((user) => user.id === learnerFicha.learnerUid);
   const selectedLearnerSheet = activeSheets.find((sheet) => sheet.id === learnerFicha.fichaId);
+  const selectedSummarySheet = activeSheets.find((sheet) => sheet.id === summarySheetId);
   const canSaveSheet = Boolean(selectedProgram) && !isDemoRecord(selectedProgram?.id);
+  const normalizeSearch = (value: string) => value.trim().toLowerCase();
+  const filterByText = <T,>(items: T[], query: string, getText: (item: T) => string) => {
+    const normalizedQuery = normalizeSearch(query);
+    return items.filter((item) => getText(item).toLowerCase().includes(normalizedQuery));
+  };
+  const filteredPrograms = filterByText(programs, programSearch, (program) =>
+    `${program.codigo || ''} ${program.nombre || ''} ${program.tipoFormacion || ''} ${program.estado || ''}`
+  ).sort((a, b) => String(a.nombre || a.codigo || '').localeCompare(String(b.nombre || b.codigo || ''), 'es', { numeric: true, sensitivity: 'base' }));
+  const filteredSheets = filterByText(sheets, sheetSearch, (sheet) =>
+    `${sheet.numero || ''} ${sheet.programaNombre || ''} ${sheet.trimestreActual || ''} ${sheet.estado || ''}`
+  ).sort((a, b) => String(a.numero || '').localeCompare(String(b.numero || ''), 'es', { numeric: true, sensitivity: 'base' }));
+  const filteredPasantes = filterByText(pasantes, pasanteSearch, (pasante) => {
+    const instructor = instructors.find((user) => user.id === pasante.instructorUid);
+    return `${pasante.nombre || ''} ${pasante.correo || ''} ${instructor?.nombre || ''} ${instructor?.correo || ''}`;
+  }).sort((a, b) => String(a.nombre || a.correo || '').localeCompare(String(b.nombre || b.correo || ''), 'es', { sensitivity: 'base' }));
+  const filteredCompetences = filterByText(competences, competenceSearch, (competence) =>
+    `${competence.codigo || ''} ${competence.nombre || ''} ${competence.descripcion || ''} ${competence.estado || ''}`
+  ).sort((a, b) => String(a.codigo || a.nombre || '').localeCompare(String(b.codigo || b.nombre || ''), 'es', { numeric: true, sensitivity: 'base' }));
+  const filteredLearningResults = filterByText(learningResults, rapSearch, (rap) => {
+    const competence = competences.find((item) => item.id === rap.competenciaId);
+    return `${rap.codigo || ''} ${rap.descripcion || ''} ${competence?.codigo || ''} ${competence?.nombre || ''} ${rap.estado || ''}`;
+  }).sort((a, b) => String(a.codigo || '').localeCompare(String(b.codigo || ''), 'es', { numeric: true, sensitivity: 'base' }));
+  const filteredAssignments = filterByText(assignments, assignmentSearch, (assignment) => {
+    const instructor = users.find((user) => user.id === assignment.instructorUid);
+    const sheet = sheets.find((item) => item.id === assignment.fichaId);
+    const competence = competences.find((item) => item.id === assignment.competenciaId);
+    return `${instructor?.nombre || ''} ${instructor?.correo || ''} ${sheet?.numero || ''} ${competence?.codigo || ''} ${competence?.nombre || ''} ${assignment.estado || ''}`;
+  });
 
   const runAcademicAction = async (action: () => Promise<void>, successMessage: string) => {
     setSaving(true);
@@ -740,8 +831,16 @@ function AcademicTab({
     setFeedback('');
 
     try {
+      if (!programForm.codigo.trim()) {
+        throw new Error('Falta el código del programa.');
+      }
+
+      if (!programForm.nombre.trim()) {
+        throw new Error('Falta el nombre del programa.');
+      }
+
       await guardarPrograma(programForm);
-      setProgramForm({ id: '', codigo: '', nombre: '' });
+      setProgramForm({ id: '', codigo: '', nombre: '', tipoFormacion: formationTypeOptions[0], activo: true, estado: 'Activo' });
       setFeedback('Programa guardado correctamente.');
     } catch (submitError: any) {
       setFeedback(submitError?.message || 'No pudimos guardar el programa.');
@@ -759,12 +858,20 @@ function AcademicTab({
         throw new Error('Crea primero un programa real para asociar la ficha.');
       }
 
+      if (!sheetForm.numero.trim()) {
+        throw new Error('Falta el número de ficha.');
+      }
+
+      if (!/^\d+$/.test(sheetForm.numero.trim())) {
+        throw new Error('El número de ficha solo debe contener números.');
+      }
+
       await guardarFicha({
         ...sheetForm,
         programaId: selectedProgram?.id || '',
         programaNombre: selectedProgram?.nombre || selectedProgram?.codigo || '',
       });
-      setSheetForm({ id: '', numero: '', programaId: selectedProgram?.id || '' });
+      setSheetForm({ id: '', numero: '', programaId: selectedProgram?.id || '', activo: true, estado: 'Activa' });
       setFeedback('Ficha guardada correctamente.');
     } catch (submitError: any) {
       setFeedback(submitError?.message || 'No pudimos guardar la ficha.');
@@ -778,305 +885,441 @@ function AcademicTab({
       <PageTitle
         icon="school-outline"
         subtitle="Gestión de fichas, asignaciones, competencias, RAP, proyectos y grupos"
-        title="Academico"
+        title="Académico"
       />
-      <Section title="Programas" subtitle="Crear, listar, editar y desactivar programas">
-        {error ? <FeedbackBox icon="alert-circle-outline" text={error} tone="error" /> : null}
-        {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
-        <View style={styles.formCard}>
-          <AdminField label="Codigo" value={programForm.codigo} onChangeText={(codigo) => setProgramForm((current) => ({ ...current, codigo }))} />
-          <AdminField label="Nombre del programa" value={programForm.nombre} onChangeText={(nombre) => setProgramForm((current) => ({ ...current, nombre }))} />
-          <Pressable disabled={saving} onPress={submitProgram} style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{programForm.id ? 'Actualizar programa' : 'Crear programa'}</Text>}
-          </Pressable>
-        </View>
+      <AcademicSectionNav activeSection={activeAcademicSection} onChange={setActiveAcademicSection} />
 
-        {loading ? <LoadingRow text="Cargando programas..." /> : null}
-        {programs.map((program) => (
-          <ProgramCard
-            key={program.id}
-            program={program}
-            onActivate={() => activarPrograma(program.id)}
-            onDeactivate={() => desactivarPrograma(program.id)}
-            onEdit={() => setProgramForm({ id: program.id, codigo: program.codigo || '', nombre: program.nombre || '' })}
-          />
-        ))}
-      </Section>
-
-      <Section title="Fichas de formacion" subtitle="Crear ficha, asociarla a programa, editar y desactivar">
-        <View style={styles.formCard}>
-          <AdminField label="Número de ficha" value={sheetForm.numero} onChangeText={(numero) => setSheetForm((current) => ({ ...current, numero }))} />
-          <OptionPicker
-            emptyLabel="Primero crea un programa"
-            options={activePrograms.map((program) => ({ label: `${program.codigo || 'Programa'} - ${program.nombre || ''}`, value: program.id }))}
-            value={sheetForm.programaId}
-            onChange={(programaId) => setSheetForm((current) => ({ ...current, programaId }))}
-          />
-          <Pressable disabled={saving || !canSaveSheet} onPress={submitSheet} style={[styles.formButton, (saving || !canSaveSheet) && styles.smallButtonDisabled]}>
-            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{sheetForm.id ? 'Actualizar ficha' : 'Crear ficha'}</Text>}
-          </Pressable>
-        </View>
-
-        {sheets.map((sheet, index) => (
-          <SheetCard
-            index={index}
-            key={sheet.id}
-            sheet={sheet}
-            onActivate={() => activarFicha(sheet.id)}
-            onDeactivate={() => desactivarFicha(sheet.id)}
-            onEdit={() => setSheetForm({ id: sheet.id, numero: sheet.numero || '', programaId: sheet.programaId || activePrograms[0]?.id || '' })}
-          />
-        ))}
-      </Section>
-
-      <Section title="Asignar usuarios a fichas" subtitle="Selecciona primero la persona y luego la ficha">
-        <View style={styles.formCard}>
-          <Text style={styles.formHint}>Aprendiz a ficha</Text>
-          <AssignmentStep number="1" text="Selecciona el aprendiz" />
-          <OptionPicker
-            emptyLabel="Primero asigna usuarios aprendiz"
-            options={learners.map((user) => ({
-              label: `${user.nombre || user.correo || user.id}${user.ficha ? ` - Actual: ${user.ficha}` : ' - Sin ficha'}`,
-              value: user.id,
-            }))}
-            value={learnerFicha.learnerUid}
-            onChange={(learnerUid) => setLearnerFicha((current) => ({ ...current, learnerUid }))}
-          />
-          <AssignmentStep number="2" text="Selecciona la ficha" />
-          <OptionPicker
-            emptyLabel="Primero crea una ficha"
-            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
-            value={learnerFicha.fichaId}
-            onChange={(fichaId) => setLearnerFicha((current) => ({ ...current, fichaId }))}
-          />
-          <Text style={styles.cardText}>
-            La ficha seleccionada asignara automaticamente programa y trimestre al aprendiz.
-          </Text>
-          <AssignmentSummary
-            text={`${selectedLearner?.nombre || 'Aprendiz pendiente'} → Ficha ${selectedLearnerSheet?.numero || 'pendiente'}`}
-          />
-          <Pressable
-            disabled={saving || !selectedLearner || !selectedLearnerSheet}
-            onPress={() => runAcademicAction(
-              () => asignarAprendizAFicha({ aprendiz: selectedLearner, ficha: selectedLearnerSheet }),
-              'Aprendiz asignado a la ficha.'
-            )}
-            style={[styles.formButton, (saving || !selectedLearner || !selectedLearnerSheet) && styles.smallButtonDisabled]}>
-            <Text style={styles.formButtonText}>Asignar ficha al aprendiz</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.formCard}>
-          <Text style={styles.formHint}>Instructor a ficha</Text>
-          <AssignmentStep number="1" text="Selecciona el instructor" />
-          <OptionPicker
-            emptyLabel="Primero asigna usuarios instructor"
-            options={instructors.map((user) => ({
-              label: `${user.nombre || user.correo || user.id} - ${user.fichasAsignadas?.length || 0} ficha(s)`,
-              value: user.id,
-            }))}
-            value={instructorFicha.instructorUid}
-            onChange={(instructorUid) => setInstructorFicha((current) => ({ ...current, instructorUid }))}
-          />
-          <AssignmentStep number="2" text="Selecciona la ficha que orientara" />
-          <OptionPicker
-            emptyLabel="Primero crea una ficha"
-            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
-            value={instructorFicha.fichaId}
-            onChange={(fichaId) => setInstructorFicha((current) => ({ ...current, fichaId }))}
-          />
-          <AssignmentSummary
-            text={`${instructors.find((user) => user.id === instructorFicha.instructorUid)?.nombre || 'Instructor pendiente'} → Ficha ${activeSheets.find((sheet) => sheet.id === instructorFicha.fichaId)?.numero || 'pendiente'}`}
-          />
-          <Pressable
-            disabled={saving}
-            onPress={() => runAcademicAction(
-              () => assignInstructorToFicha(instructorFicha.instructorUid, instructorFicha.fichaId),
-              'Instructor asignado a la ficha.'
-            )}
-            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-            <Text style={styles.formButtonText}>Asignar instructor</Text>
-          </Pressable>
-        </View>
-      </Section>
-
-      <Section title="Asignar pasante" subtitle="El pasante heredara las fichas del instructor seleccionado">
-        <View style={styles.formCard}>
-          <Text style={styles.formHint}>Pasante a instructor</Text>
-          <AssignmentStep number="1" text="Selecciona el pasante" />
-          <OptionPicker
-            emptyLabel="Primero asigna usuarios pasante"
-            options={pasantes.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
-            value={pasanteInstructor.pasanteUid}
-            onChange={(pasanteUid) => setPasanteInstructor((current) => ({ ...current, pasanteUid }))}
-          />
-          <AssignmentStep number="2" text="Selecciona el instructor responsable" />
-          <OptionPicker
-            emptyLabel="Primero asigna usuarios instructor"
-            options={instructors.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
-            value={pasanteInstructor.instructorUid}
-            onChange={(instructorUid) => setPasanteInstructor((current) => ({ ...current, instructorUid }))}
-          />
-          <AssignmentSummary
-            text={`${pasantes.find((user) => user.id === pasanteInstructor.pasanteUid)?.nombre || 'Pasante pendiente'} → ${instructors.find((user) => user.id === pasanteInstructor.instructorUid)?.nombre || 'Instructor pendiente'}`}
-          />
-          <Pressable
-            disabled={saving}
-            onPress={() => runAcademicAction(
-              () => assignPasanteToInstructor(pasanteInstructor.instructorUid, pasanteInstructor.pasanteUid),
-              'Pasante asignado al instructor y sus fichas.'
-            )}
-            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-            <Text style={styles.formButtonText}>Asignar pasante</Text>
-          </Pressable>
-        </View>
-      </Section>
-
-      <Section title="Resumen por ficha" subtitle="Revisa rápidamente las asignaciones guardadas">
-        {activeSheets.map((sheet) => {
-          const sheetLearners = learners.filter((user) => user.fichaId === sheet.id);
-          const sheetInstructors = instructors.filter((user) =>
-            (sheet.instructorUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
-          );
-          const sheetPasantes = pasantes.filter((user) =>
-            (sheet.pasantesUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
-          );
-
-          return (
-            <SimpleAdminCard
-              key={`summary-${sheet.id}`}
-              title={`Ficha ${sheet.numero || sheet.id} - ${sheet.trimestreActual || 'Sin trimestre'}`}
-              subtitle={`Aprendices: ${sheetLearners.map((user) => user.nombre).filter(Boolean).join(', ') || 'ninguno'} | Instructores: ${sheetInstructors.map((user) => user.nombre).filter(Boolean).join(', ') || 'ninguno'} | Pasantes: ${sheetPasantes.map((user) => user.nombre).filter(Boolean).join(', ') || 'ninguno'}`}
+      {activeAcademicSection === 'programas' ? (
+        <Section title="Programas" subtitle="Crear, listar, editar y desactivar programas">
+          {error ? <FeedbackBox icon="alert-circle-outline" text={error} tone="error" /> : null}
+          {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
+          <View style={styles.formCard}>
+            <AdminField label="Código" value={programForm.codigo} onChangeText={(codigo) => setProgramForm((current) => ({ ...current, codigo }))} />
+            <AdminField label="Nombre del programa" value={programForm.nombre} onChangeText={(nombre) => setProgramForm((current) => ({ ...current, nombre }))} />
+            <OptionPicker
+              emptyLabel="Selecciona el tipo de formación"
+              options={formationTypeOptions.map((tipo) => ({ label: tipo, value: tipo }))}
+              value={programForm.tipoFormacion}
+              onChange={(tipoFormacion) => setProgramForm((current) => ({ ...current, tipoFormacion }))}
             />
-          );
-        })}
-      </Section>
+            <Pressable disabled={saving} onPress={submitProgram} style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+              {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{programForm.id ? 'Actualizar programa' : 'Crear programa'}</Text>}
+            </Pressable>
+          </View>
 
-      <Section title="Competencias y RAP" subtitle="El instructor solo puede recibir competencias que ya tengan resultados">
-        <View style={styles.formCard}>
-          <AdminField label="Codigo competencia" value={competenceForm.codigo} onChangeText={(codigo) => setCompetenceForm((current) => ({ ...current, codigo }))} />
-          <AdminField label="Nombre competencia" value={competenceForm.nombre} onChangeText={(nombre) => setCompetenceForm((current) => ({ ...current, nombre }))} />
-          <AdminField label="Descripcion" value={competenceForm.descripcion} onChangeText={(descripcion) => setCompetenceForm((current) => ({ ...current, descripcion }))} />
-          <Pressable
-            disabled={saving}
-            onPress={() => runAcademicAction(async () => {
-              await guardarCompetencia(competenceForm);
-              setCompetenceForm({ id: '', codigo: '', nombre: '', descripcion: '' });
-            }, 'Competencia guardada correctamente.')}
-            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-            <Text style={styles.formButtonText}>{competenceForm.id ? 'Actualizar competencia' : 'Crear competencia'}</Text>
-          </Pressable>
-        </View>
+          {loading ? <LoadingRow text="Cargando programas..." /> : null}
+          <ScrollableAdminList
+            emptyText="No encontramos programas con esa búsqueda."
+            placeholder="Buscar programa por código, nombre o tipo..."
+            search={programSearch}
+            onSearchChange={setProgramSearch}>
+            {filteredPrograms.map((program) => (
+              <ProgramCard
+                key={program.id}
+                program={program}
+                onActivate={() => activarPrograma(program.id)}
+                onDeactivate={() => desactivarPrograma(program.id)}
+                onEdit={() => setProgramForm({
+                  id: program.id,
+                  codigo: program.codigo || '',
+                  nombre: program.nombre || '',
+                  tipoFormacion: program.tipoFormacion || formationTypeOptions[0],
+                  activo: program.activo !== false,
+                  estado: program.estado || (program.activo === false ? 'Inactivo' : 'Activo'),
+                })}
+              />
+            ))}
+          </ScrollableAdminList>
+        </Section>
+      ) : null}
 
-        {competences.map((competence) => (
-          <SimpleAdminCard
-            key={competence.id}
-            title={`${competence.codigo || 'COMP'} - ${competence.nombre || 'Competencia'}`}
-            subtitle={competence.descripcion || 'Sin descripcion'}
-            inactive={!isActiveRecord(competence)}
-            onActivate={() => activarCompetencia(competence.id)}
-            onDeactivate={() => desactivarCompetencia(competence.id)}
-            onEdit={() => setCompetenceForm({
-              id: competence.id,
-              codigo: competence.codigo || '',
-              nombre: competence.nombre || '',
-              descripcion: competence.descripcion || '',
+      {activeAcademicSection === 'fichas' ? (
+        <Section title="Fichas de formación" subtitle="Crear ficha, asociarla a programa, editar y desactivar">
+          <View style={styles.formCard}>
+            <AdminField
+              keyboardType="numeric"
+              label="Número de ficha"
+              numericOnly
+              value={sheetForm.numero}
+              onInvalidInput={() => setFeedback('El número de ficha solo debe contener números.')}
+              onChangeText={(numero) => setSheetForm((current) => ({ ...current, numero }))}
+            />
+            <OptionPicker
+              emptyLabel="Primero crea un programa"
+              options={activePrograms.map((program) => ({ label: `${program.codigo || 'Programa'} - ${program.nombre || ''}`, value: program.id }))}
+              value={sheetForm.programaId}
+              onChange={(programaId) => setSheetForm((current) => ({ ...current, programaId }))}
+            />
+            <Pressable disabled={saving || !canSaveSheet} onPress={submitSheet} style={[styles.formButton, (saving || !canSaveSheet) && styles.smallButtonDisabled]}>
+              {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{sheetForm.id ? 'Actualizar ficha' : 'Crear ficha'}</Text>}
+            </Pressable>
+          </View>
+          <ScrollableAdminList
+            emptyText="No encontramos fichas con esa búsqueda."
+            placeholder="Buscar ficha por número, programa o trimestre..."
+            search={sheetSearch}
+            onSearchChange={setSheetSearch}>
+            {filteredSheets.map((sheet, index) => (
+              <SheetCard
+                index={index}
+                key={sheet.id}
+                sheet={sheet}
+                onActivate={() => activarFicha(sheet.id)}
+                onDeactivate={() => desactivarFicha(sheet.id)}
+                onEdit={() => setSheetForm({
+                  id: sheet.id,
+                  numero: sheet.numero || '',
+                  programaId: sheet.programaId || activePrograms[0]?.id || '',
+                  activo: sheet.activo !== false,
+                  estado: sheet.estado || (sheet.activo === false ? 'Inactiva' : 'Activa'),
+                })}
+              />
+            ))}
+          </ScrollableAdminList>
+        </Section>
+      ) : null}
+
+      {activeAcademicSection === 'usuarios-fichas' ? (
+        <Section title="Asignar usuarios a fichas" subtitle="Selecciona primero la persona y luego la ficha">
+          <View style={styles.formCard}>
+            <Text style={styles.formHint}>Aprendiz a ficha</Text>
+            <AssignmentStep number="1" text="Selecciona el aprendiz" />
+            <OptionPicker
+              emptyLabel="Primero asigna usuarios aprendiz"
+              options={learners.map((user) => ({
+                label: `${user.nombre || user.correo || user.id}${user.ficha ? ` - Actual: ${user.ficha}` : ' - Sin ficha'}`,
+                value: user.id,
+              }))}
+              value={learnerFicha.learnerUid}
+              onChange={(learnerUid) => setLearnerFicha((current) => ({ ...current, learnerUid }))}
+            />
+            <AssignmentStep number="2" text="Selecciona la ficha" />
+            <OptionPicker
+              emptyLabel="Primero crea una ficha"
+              options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+              value={learnerFicha.fichaId}
+              onChange={(fichaId) => setLearnerFicha((current) => ({ ...current, fichaId }))}
+            />
+            <Text style={styles.cardText}>
+              La ficha seleccionada asignará automáticamente programa y trimestre al aprendiz.
+            </Text>
+            <AssignmentSummary
+              text={`${selectedLearner?.nombre || 'Aprendiz pendiente'} → Ficha ${selectedLearnerSheet?.numero || 'pendiente'}`}
+            />
+            <Pressable
+              disabled={saving || !selectedLearner || !selectedLearnerSheet}
+              onPress={() => runAcademicAction(
+                () => asignarAprendizAFicha({ aprendiz: selectedLearner, ficha: selectedLearnerSheet }),
+                'Aprendiz asignado a la ficha.'
+              )}
+              style={[styles.formButton, (saving || !selectedLearner || !selectedLearnerSheet) && styles.smallButtonDisabled]}>
+              <Text style={styles.formButtonText}>Asignar ficha al aprendiz</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.formCard}>
+            <Text style={styles.formHint}>Instructor a ficha</Text>
+            <AssignmentStep number="1" text="Selecciona el instructor" />
+            <OptionPicker
+              emptyLabel="Primero asigna usuarios instructor"
+              options={instructors.map((user) => ({
+                label: `${user.nombre || user.correo || user.id} - ${user.fichasAsignadas?.length || 0} ficha(s)`,
+                value: user.id,
+              }))}
+              value={instructorFicha.instructorUid}
+              onChange={(instructorUid) => setInstructorFicha((current) => ({ ...current, instructorUid }))}
+            />
+            <AssignmentStep number="2" text="Selecciona la ficha que orientara" />
+            <OptionPicker
+              emptyLabel="Primero crea una ficha"
+              options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+              value={instructorFicha.fichaId}
+              onChange={(fichaId) => setInstructorFicha((current) => ({ ...current, fichaId }))}
+            />
+            <AssignmentSummary
+              text={`${instructors.find((user) => user.id === instructorFicha.instructorUid)?.nombre || 'Instructor pendiente'} → Ficha ${activeSheets.find((sheet) => sheet.id === instructorFicha.fichaId)?.numero || 'pendiente'}`}
+            />
+            <Pressable
+              disabled={saving}
+              onPress={() => runAcademicAction(
+                () => assignInstructorToFicha(instructorFicha.instructorUid, instructorFicha.fichaId),
+                'Instructor asignado a la ficha.'
+              )}
+              style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+              <Text style={styles.formButtonText}>Asignar instructor</Text>
+            </Pressable>
+          </View>
+        </Section>
+      ) : null}
+
+      {activeAcademicSection === 'pasantes' ? (
+        <Section title="Asignar pasante" subtitle="El pasante heredara las fichas del instructor seleccionado">
+          <View style={styles.formCard}>
+            <Text style={styles.formHint}>Pasante a instructor</Text>
+            <AssignmentStep number="1" text="Selecciona el pasante" />
+            <OptionPicker
+              emptyLabel="Primero asigna usuarios pasante"
+              options={pasantes.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
+              value={pasanteInstructor.pasanteUid}
+              onChange={(pasanteUid) => setPasanteInstructor((current) => ({ ...current, pasanteUid }))}
+            />
+            <AssignmentStep number="2" text="Selecciona el instructor responsable" />
+            <OptionPicker
+              emptyLabel="Primero asigna usuarios instructor"
+              options={instructors.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
+              value={pasanteInstructor.instructorUid}
+              onChange={(instructorUid) => setPasanteInstructor((current) => ({ ...current, instructorUid }))}
+            />
+            <AssignmentSummary
+              text={`${pasantes.find((user) => user.id === pasanteInstructor.pasanteUid)?.nombre || 'Pasante pendiente'} → ${instructors.find((user) => user.id === pasanteInstructor.instructorUid)?.nombre || 'Instructor pendiente'}`}
+            />
+            <Pressable
+              disabled={saving}
+              onPress={() => runAcademicAction(
+                () => assignPasanteToInstructor(pasanteInstructor.instructorUid, pasanteInstructor.pasanteUid),
+                'Pasante asignado al instructor y sus fichas.'
+              )}
+              style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+              <Text style={styles.formButtonText}>Asignar pasante</Text>
+            </Pressable>
+          </View>
+          <ScrollableAdminList
+            emptyText="No encontramos pasantes con esa búsqueda."
+            placeholder="Buscar pasante o instructor..."
+            search={pasanteSearch}
+            onSearchChange={setPasanteSearch}>
+            {filteredPasantes.map((pasante) => {
+              const instructor = instructors.find((user) => user.id === pasante.instructorUid);
+
+              return (
+                <SimpleAdminCard
+                  key={`pasante-${pasante.id}`}
+                  title={pasante.nombre || pasante.correo || 'Pasante'}
+                  subtitle={instructor ? `Instructor: ${instructor.nombre || instructor.correo}` : 'Sin instructor asignado'}
+                  onDeactivate={instructor ? () => runAcademicAction(
+                    () => removePasanteFromInstructor(instructor.id, pasante.id),
+                    'Relación pasante-instructor retirada.'
+                  ) : undefined}
+                />
+              );
             })}
-          />
-        ))}
+          </ScrollableAdminList>
+        </Section>
+      ) : null}
 
-        <View style={styles.formCard}>
-          <Text style={styles.formHint}>Resultado de aprendizaje</Text>
-          <OptionPicker
-            emptyLabel="Primero crea una competencia"
-            options={competences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
-            value={rapForm.competenciaId}
-            onChange={(competenciaId) => setRapForm((current) => ({ ...current, competenciaId }))}
-          />
-          <AdminField label="Codigo RAP" value={rapForm.codigo} onChangeText={(codigo) => setRapForm((current) => ({ ...current, codigo }))} />
-          <AdminField label="Descripcion RAP" value={rapForm.descripcion} onChangeText={(descripcion) => setRapForm((current) => ({ ...current, descripcion }))} />
-          <Pressable
-            disabled={saving}
-            onPress={() => runAcademicAction(async () => {
-              await guardarResultadoAprendizaje(rapForm);
-              setRapForm({ id: '', competenciaId: rapForm.competenciaId, codigo: '', descripcion: '' });
-            }, 'RAP guardado correctamente.')}
-            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-            <Text style={styles.formButtonText}>{rapForm.id ? 'Actualizar RAP' : 'Crear RAP'}</Text>
-          </Pressable>
-        </View>
-
-        {learningResults.map((rap) => {
-          const competence = competences.find((item) => item.id === rap.competenciaId);
-          return (
-            <SimpleAdminCard
-              key={rap.id}
-              title={`${rap.codigo || 'RAP'} - ${competence?.nombre || 'Competencia'}`}
-              subtitle={rap.descripcion || 'Sin descripcion'}
-              inactive={!isActiveRecord(rap)}
-              onActivate={() => activarResultadoAprendizaje(rap.id)}
-              onDeactivate={() => desactivarResultadoAprendizaje(rap.id)}
-              onEdit={() => setRapForm({
-                id: rap.id,
-                competenciaId: rap.competenciaId || activeCompetences[0]?.id || '',
-                codigo: rap.codigo || '',
-                descripcion: rap.descripcion || '',
-              })}
-            />
-          );
-        })}
-      </Section>
-
-      <Section title="Asignar competencia" subtitle="Instructor, ficha y competencia con RAP activos">
-        <View style={styles.formCard}>
-          <AssignmentStep number="1" text="Selecciona el instructor" />
-          <OptionPicker
-            emptyLabel="Primero asigna usuarios instructor"
-            options={instructors.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
-            value={competenceAssignment.instructorUid}
-            onChange={(instructorUid) => setCompetenceAssignment((current) => ({ ...current, instructorUid }))}
-          />
-          <AssignmentStep number="2" text="Selecciona la ficha" />
+      {activeAcademicSection === 'resumen' ? (
+        <Section title="Resumen por ficha" subtitle="Revisa rápidamente las asignaciones guardadas">
           <OptionPicker
             emptyLabel="Primero crea una ficha"
-            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
-            value={competenceAssignment.fichaId}
-            onChange={(fichaId) => setCompetenceAssignment((current) => ({ ...current, fichaId }))}
+            options={activeSheets.map((sheet) => ({
+              label: `Ficha ${sheet.numero || sheet.id} - ${sheet.programaNombre || 'Sin programa'} - ${sheet.trimestreActual || 'Sin trimestre'}`,
+              value: sheet.id,
+            }))}
+            value={summarySheetId}
+            onChange={setSummarySheetId}
           />
-          <AssignmentStep number="3" text="Selecciona la competencia" />
-          <OptionPicker
-            emptyLabel="Primero crea una competencia"
-            options={activeCompetences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
-            value={competenceAssignment.competenciaId}
-            onChange={(competenciaId) => setCompetenceAssignment((current) => ({ ...current, competenciaId }))}
-          />
-          <AssignmentSummary
-            text={`${instructors.find((user) => user.id === competenceAssignment.instructorUid)?.nombre || 'Instructor'} → Ficha ${activeSheets.find((sheet) => sheet.id === competenceAssignment.fichaId)?.numero || 'pendiente'} → ${activeCompetences.find((item) => item.id === competenceAssignment.competenciaId)?.nombre || 'Competencia pendiente'}`}
-          />
-          <Pressable
-            disabled={saving}
-            onPress={() => runAcademicAction(
-              () => asignarCompetenciaInstructor(competenceAssignment),
-              'Competencia asignada al instructor para la ficha.'
-            )}
-            style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-            <Text style={styles.formButtonText}>Asignar competencia</Text>
-          </Pressable>
-        </View>
+          {(selectedSummarySheet ? [selectedSummarySheet] : []).map((sheet) => {
+            const sheetLearners = learners.filter((user) => user.fichaId === sheet.id);
+            const sheetInstructors = instructors.filter((user) =>
+              (sheet.instructorUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
+            );
+            const sheetPasantes = pasantes.filter((user) =>
+              (sheet.pasantesUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
+            );
 
-        {assignments.map((assignment) => {
-          const instructor = users.find((user) => user.id === assignment.instructorUid);
-          const sheet = sheets.find((item) => item.id === assignment.fichaId);
-          const competence = competences.find((item) => item.id === assignment.competenciaId);
-          return (
-            <SimpleAdminCard
-              key={assignment.id}
-              title={`${competence?.codigo || 'COMP'} - ${competence?.nombre || 'Competencia'}`}
-              subtitle={`${instructor?.nombre || 'Instructor'} / Ficha ${sheet?.numero || 'sin ficha'}`}
+            return (
+              <View key={`summary-${sheet.id}`} style={styles.sheetCard}>
+                <View style={styles.sheetHeader}>
+                  <View style={styles.userCopy}>
+                    <Text style={styles.sheetTitle}>
+                      Ficha {sheet.numero || sheet.id} - {sheet.trimestreActual || 'Sin trimestre'}
+                    </Text>
+                    <Text style={styles.sheetProgram}>{sheet.programaNombre || 'Sin programa'}</Text>
+                  </View>
+                </View>
+
+                <RelationGroup
+                  emptyText="Sin aprendices asignados"
+                  items={sheetLearners}
+                  title="Aprendices"
+                  onRemove={(user) => runAcademicAction(
+                    () => quitarAprendizDeFicha(user.id),
+                    'Aprendiz retirado de la ficha.'
+                  )}
+                />
+                <RelationGroup
+                  emptyText="Sin instructores asignados"
+                  items={sheetInstructors}
+                  title="Instructores"
+                  onRemove={(user) => runAcademicAction(
+                    () => removeInstructorFromFicha(user.id, sheet.id),
+                    'Instructor retirado de la ficha.'
+                  )}
+                />
+                <RelationGroup
+                  emptyText="Sin pasantes asignados"
+                  items={sheetPasantes}
+                  title="Pasantes"
+                  onRemove={(user) => runAcademicAction(
+                    () => removePasanteFromFicha(user.id, sheet.id),
+                    'Pasante retirado de la ficha.'
+                  )}
+                />
+              </View>
+            );
+          })}
+        </Section>
+      ) : null}
+
+      {activeAcademicSection === 'competencias' ? (
+        <Section title="Competencias y RAP" subtitle="El instructor solo puede recibir competencias que ya tengan resultados">
+          <View style={styles.formCard}>
+            <AdminField label="Código competencia" value={competenceForm.codigo} onChangeText={(codigo) => setCompetenceForm((current) => ({ ...current, codigo }))} />
+            <AdminField label="Nombre competencia" value={competenceForm.nombre} onChangeText={(nombre) => setCompetenceForm((current) => ({ ...current, nombre }))} />
+            <AdminField label="Descripción" value={competenceForm.descripcion} onChangeText={(descripcion) => setCompetenceForm((current) => ({ ...current, descripcion }))} />
+            <Pressable
+              disabled={saving}
+              onPress={() => runAcademicAction(async () => {
+                await guardarCompetencia(competenceForm);
+                setCompetenceForm({ id: '', codigo: '', nombre: '', descripcion: '' });
+              }, 'Competencia guardada correctamente.')}
+              style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+              <Text style={styles.formButtonText}>{competenceForm.id ? 'Actualizar competencia' : 'Crear competencia'}</Text>
+            </Pressable>
+          </View>
+          <ScrollableAdminList
+            emptyText="No encontramos competencias con esa búsqueda."
+            placeholder="Buscar competencia por código, nombre o descripción..."
+            search={competenceSearch}
+            onSearchChange={setCompetenceSearch}>
+            {filteredCompetences.map((competence) => (
+              <SimpleAdminCard
+                key={competence.id}
+                title={`${competence.codigo || 'COMP'} - ${competence.nombre || 'Competencia'}`}
+                subtitle={competence.descripcion || 'Sin descripción'}
+                inactive={!isActiveRecord(competence)}
+                onActivate={() => activarCompetencia(competence.id)}
+                onDeactivate={() => desactivarCompetencia(competence.id)}
+                onEdit={() => setCompetenceForm({
+                  id: competence.id,
+                  codigo: competence.codigo || '',
+                  nombre: competence.nombre || '',
+                  descripcion: competence.descripcion || '',
+                })}
+              />
+            ))}
+          </ScrollableAdminList>
+
+          <View style={styles.formCard}>
+            <Text style={styles.formHint}>Resultado de aprendizaje</Text>
+            <OptionPicker
+              emptyLabel="Primero crea una competencia"
+              options={competences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
+              value={rapForm.competenciaId}
+              onChange={(competenciaId) => setRapForm((current) => ({ ...current, competenciaId }))}
             />
-          );
-        })}
-      </Section>
+            <AdminField label="Código RAP" value={rapForm.codigo} onChangeText={(codigo) => setRapForm((current) => ({ ...current, codigo }))} />
+            <AdminField label="Descripción RAP" value={rapForm.descripcion} onChangeText={(descripcion) => setRapForm((current) => ({ ...current, descripcion }))} />
+            <Pressable
+              disabled={saving}
+              onPress={() => runAcademicAction(async () => {
+                await guardarResultadoAprendizaje(rapForm);
+                setRapForm({ id: '', competenciaId: rapForm.competenciaId, codigo: '', descripcion: '' });
+              }, 'RAP guardado correctamente.')}
+              style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+              <Text style={styles.formButtonText}>{rapForm.id ? 'Actualizar RAP' : 'Crear RAP'}</Text>
+            </Pressable>
+          </View>
+          <ScrollableAdminList
+            emptyText="No encontramos RAP con esa búsqueda."
+            placeholder="Buscar RAP por código, descripción o competencia..."
+            search={rapSearch}
+            onSearchChange={setRapSearch}>
+            {filteredLearningResults.map((rap) => {
+              const competence = competences.find((item) => item.id === rap.competenciaId);
+              return (
+                <SimpleAdminCard
+                  key={rap.id}
+                  title={`${rap.codigo || 'RAP'} - ${competence?.nombre || 'Competencia'}`}
+                  subtitle={rap.descripcion || 'Sin descripción'}
+                  inactive={!isActiveRecord(rap)}
+                  onActivate={() => activarResultadoAprendizaje(rap.id)}
+                  onDeactivate={() => desactivarResultadoAprendizaje(rap.id)}
+                  onEdit={() => setRapForm({
+                    id: rap.id,
+                    competenciaId: rap.competenciaId || activeCompetences[0]?.id || '',
+                    codigo: rap.codigo || '',
+                    descripcion: rap.descripcion || '',
+                  })}
+                />
+              );
+            })}
+          </ScrollableAdminList>
+        </Section>
+      ) : null}
+
+      {activeAcademicSection === 'asignar-competencia' ? (
+        <Section title="Asignar competencia" subtitle="Instructor, ficha y competencia con RAP activos">
+          <View style={styles.formCard}>
+            <AssignmentStep number="1" text="Selecciona el instructor" />
+            <OptionPicker
+              emptyLabel="Primero asigna usuarios instructor"
+              options={instructors.map((user) => ({ label: user.nombre || user.correo || user.id, value: user.id }))}
+              value={competenceAssignment.instructorUid}
+              onChange={(instructorUid) => setCompetenceAssignment((current) => ({ ...current, instructorUid }))}
+            />
+            <AssignmentStep number="2" text="Selecciona la ficha" />
+            <OptionPicker
+              emptyLabel="Primero crea una ficha"
+              options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
+              value={competenceAssignment.fichaId}
+              onChange={(fichaId) => setCompetenceAssignment((current) => ({ ...current, fichaId }))}
+            />
+            <AssignmentStep number="3" text="Selecciona la competencia" />
+            <OptionPicker
+              emptyLabel="Primero crea una competencia"
+              options={activeCompetences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
+              value={competenceAssignment.competenciaId}
+              onChange={(competenciaId) => setCompetenceAssignment((current) => ({ ...current, competenciaId }))}
+            />
+            <AssignmentSummary
+              text={`${instructors.find((user) => user.id === competenceAssignment.instructorUid)?.nombre || 'Instructor'} → Ficha ${activeSheets.find((sheet) => sheet.id === competenceAssignment.fichaId)?.numero || 'pendiente'} → ${activeCompetences.find((item) => item.id === competenceAssignment.competenciaId)?.nombre || 'Competencia pendiente'}`}
+            />
+            <Pressable
+              disabled={saving}
+              onPress={() => runAcademicAction(
+                () => asignarCompetenciaInstructor(competenceAssignment),
+                'Competencia asignada al instructor para la ficha.'
+              )}
+              style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+              <Text style={styles.formButtonText}>Asignar competencia</Text>
+            </Pressable>
+          </View>
+          <ScrollableAdminList
+            emptyText="No encontramos asignaciones con esa búsqueda."
+            placeholder="Buscar por instructor, ficha o competencia..."
+            search={assignmentSearch}
+            onSearchChange={setAssignmentSearch}>
+            {filteredAssignments.map((assignment) => {
+              const instructor = users.find((user) => user.id === assignment.instructorUid);
+              const sheet = sheets.find((item) => item.id === assignment.fichaId);
+              const competence = competences.find((item) => item.id === assignment.competenciaId);
+              return (
+                <SimpleAdminCard
+                  key={assignment.id}
+                  title={`${competence?.codigo || 'COMP'} - ${competence?.nombre || 'Competencia'}`}
+                  subtitle={`${instructor?.nombre || 'Instructor'} / Ficha ${sheet?.numero || 'sin ficha'}`}
+                  inactive={!isActiveRecord(assignment)}
+                  onDeactivate={isActiveRecord(assignment) ? () => runAcademicAction(
+                    () => desactivarAsignacionCompetencia(assignment.id),
+                    'Asignación de competencia retirada.'
+                  ) : undefined}
+                />
+              );
+            })}
+          </ScrollableAdminList>
+        </Section>
+      ) : null}
     </>
   );
 }
@@ -1093,67 +1336,125 @@ function TrimesterTab({
   trimesters: AcademicTrimester[];
 }) {
   const activeSheets = sheets.filter(isActiveRecord);
-  const firstSheetId = activeSheets[0]?.id || '';
   const activeTrimesters = trimesters.filter(isActiveRecord);
   const firstTrimesterId = activeTrimesters[0]?.id || '';
+  const [sheetSearch, setSheetSearch] = useState('');
+  const [dateForm, setDateForm] = useState({ id: '', fechaInicio: '', fechaFin: '' });
   const [form, setForm] = useState({
-    id: '',
+    trimestreId: firstTrimesterId,
     numero: '1',
-    fechaInicio: '',
-    fechaFin: '',
+    fichaIds: [] as string[],
   });
-  const [assignmentForm, setAssignmentForm] = useState({ fichaId: firstSheetId, trimestreId: firstTrimesterId });
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
-  const currentTrimester = calcularTrimestreActual(trimesters);
 
   useEffect(() => {
-    setAssignmentForm((current) => {
-      const next = {
-        fichaId: current.fichaId || firstSheetId,
-        trimestreId: current.trimestreId || firstTrimesterId,
-      };
-      return next.fichaId === current.fichaId && next.trimestreId === current.trimestreId ? current : next;
-    });
-  }, [firstSheetId, firstTrimesterId]);
+    if (!form.trimestreId && firstTrimesterId) {
+      setForm((current) => ({ ...current, trimestreId: firstTrimesterId }));
+    }
+  }, [firstTrimesterId, form.trimestreId]);
 
-  const selectedSheet = activeSheets.find((sheet) => sheet.id === assignmentForm.fichaId);
-  const selectedTrimester = activeTrimesters.find((trimester) => trimester.id === assignmentForm.trimestreId);
-  const canSaveTrimester = !isDemoRecord(form.id);
+  const selectedTrimester = activeTrimesters.find((trimester) => trimester.id === form.trimestreId);
+  const filteredSheets = activeSheets
+    .filter((sheet) => {
+      const queryText = `${sheet.numero || ''} ${sheet.programaNombre || ''} ${sheet.trimestreActual || ''}`.toLowerCase();
+      return queryText.includes(sheetSearch.trim().toLowerCase());
+    })
+    .sort((a, b) => String(a.numero || '').localeCompare(String(b.numero || ''), 'es', { numeric: true }));
+  const selectedSheets = activeSheets.filter((sheet) => form.fichaIds.includes(sheet.id));
 
-  const submitTrimester = async () => {
+  const toggleSheet = (sheetId: string) => {
+    setForm((current) => ({
+      ...current,
+      fichaIds: current.fichaIds.includes(sheetId)
+        ? current.fichaIds.filter((id) => id !== sheetId)
+        : [...current.fichaIds, sheetId],
+    }));
+  };
+
+  const submitTrimesterDates = async () => {
     setSaving(true);
     setFeedback('');
 
     try {
-      await guardarTrimestre(form);
-      setForm({
-        id: '',
-        numero: '1',
-        fechaInicio: '',
-        fechaFin: '',
+      if (!dateForm.fechaInicio.trim()) {
+        throw new Error('Falta la fecha de inicio.');
+      }
+
+      if (!dateForm.fechaFin.trim()) {
+        throw new Error('Falta la fecha fin.');
+      }
+
+      await guardarTrimestre({
+        ...dateForm,
+        activo: true,
+        estado: 'Activo',
       });
-      setFeedback('Trimestre guardado correctamente.');
+      setDateForm({ id: '', fechaInicio: '', fechaFin: '' });
+      setFeedback('Fechas de trimestre creadas correctamente.');
     } catch (submitError: any) {
-      setFeedback(submitError?.message || 'No pudimos guardar el trimestre.');
+      setFeedback(submitError?.message || 'No pudimos crear las fechas.');
     } finally {
       setSaving(false);
     }
   };
 
-  const submitTrimesterAssignment = async () => {
+  const submitSheetTrimester = async () => {
     setSaving(true);
     setFeedback('');
 
     try {
-      if (!selectedSheet || !selectedTrimester) {
-        throw new Error('Selecciona una ficha y un trimestre activos.');
+      if (!selectedTrimester) {
+        throw new Error('Selecciona una fecha de trimestre.');
       }
 
-      await asignarTrimestreAFicha({ fichaId: selectedSheet.id, trimestre: selectedTrimester });
-      setFeedback(`Trimestre ${selectedTrimester.numero} asignado a ficha ${selectedSheet.numero}.`);
+      if (!selectedSheets.length) {
+        throw new Error('Selecciona una o varias fichas.');
+      }
+
+      if (!form.numero.trim()) {
+        throw new Error('Falta el número de trimestre.');
+      }
+
+      if (!/^\d+$/.test(form.numero.trim())) {
+        throw new Error('El número de trimestre solo debe contener números.');
+      }
+
+      const trimesterToAssign = {
+        ...selectedTrimester,
+        numero: Number(form.numero),
+      };
+
+      await Promise.all(selectedSheets.map((sheet) =>
+        asignarTrimestreAFicha({ fichaId: sheet.id, trimestre: trimesterToAssign })
+      ));
+      setFeedback(`Trimestre ${form.numero} asignado a ${selectedSheets.length} ficha(s).`);
     } catch (submitError: any) {
       setFeedback(submitError?.message || 'No pudimos asignar el trimestre.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const editSheetTrimester = (sheet: AcademicSheet) => {
+    setForm({
+      trimestreId: sheet.trimestreId || firstTrimesterId,
+      numero: String(sheet.trimestreNumero || '').trim() || '1',
+      fichaIds: [sheet.id],
+    });
+    setFeedback(`Editando trimestre de la ficha ${sheet.numero || sheet.id}.`);
+  };
+
+  const removeSheetTrimester = async (sheet: AcademicSheet) => {
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      await quitarTrimestreDeFicha(sheet.id);
+      setFeedback(`Trimestre retirado de la ficha ${sheet.numero || sheet.id}.`);
+      setForm((current) => ({ ...current, fichaIds: current.fichaIds.filter((id) => id !== sheet.id) }));
+    } catch (submitError: any) {
+      setFeedback(submitError?.message || 'No pudimos quitar el trimestre de la ficha.');
     } finally {
       setSaving(false);
     }
@@ -1163,131 +1464,240 @@ function TrimesterTab({
     <>
       <PageTitle
         icon="calendar-sync-outline"
-        subtitle="Fechas de inicio, calendario por ficha y trimestre visible en perfiles"
+        subtitle="Crea fechas y luego asígnalas a una o varias fichas"
         title="Trimestres"
       />
 
-      <Section title="Crear trimestre" subtitle="Número, fecha de inicio y fecha de fin">
+      <Section title="Crear fechas de trimestre" subtitle="Primero registra el rango de fechas que luego usarás en las fichas">
         {error ? <FeedbackBox icon="alert-circle-outline" text={error} tone="error" /> : null}
         {feedback ? <FeedbackBox icon="check-circle-outline" text={feedback} tone="info" /> : null}
+
         <View style={styles.formCard}>
-          <AdminField label="Número" keyboardType="numeric" value={form.numero} onChangeText={(numero) => setForm((current) => ({ ...current, numero }))} />
-          <DateField label="Fecha inicio" value={form.fechaInicio} onChange={(fechaInicio) => setForm((current) => ({ ...current, fechaInicio }))} />
-          <DateField label="Fecha fin" value={form.fechaFin} onChange={(fechaFin) => setForm((current) => ({ ...current, fechaFin }))} />
-          <Pressable disabled={saving || !canSaveTrimester} onPress={submitTrimester} style={[styles.formButton, (saving || !canSaveTrimester) && styles.smallButtonDisabled]}>
-            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>{form.id ? 'Actualizar trimestre' : 'Crear trimestre'}</Text>}
+          <DateField label="Fecha inicio" value={dateForm.fechaInicio} onChange={(fechaInicio) => setDateForm((current) => ({ ...current, fechaInicio }))} />
+          <DateField label="Fecha fin" value={dateForm.fechaFin} onChange={(fechaFin) => setDateForm((current) => ({ ...current, fechaFin }))} />
+          <Pressable disabled={saving} onPress={submitTrimesterDates} style={[styles.formButton, saving && styles.smallButtonDisabled]}>
+            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>Crear fechas</Text>}
           </Pressable>
         </View>
       </Section>
 
-      <Section title="Trimestre actual" subtitle="Calculado segun las fechas configuradas">
-        {currentTrimester ? (
-          <CurrentTrimesterCard trimester={currentTrimester} />
-        ) : (
-          <FeedbackBox icon="calendar-alert" text="No hay trimestre activo para la fecha actual." tone="info" />
-        )}
-      </Section>
-
-      <Section title="Asignar trimestre a ficha" subtitle="La ficha comparte este dato con aprendiz, instructor y pasante">
+      <Section title="Asignar trimestre a fichas" subtitle="Selecciona una fecha creada, define el número y elige una o varias fichas">
         <View style={styles.formCard}>
-          <AssignmentStep number="1" text="Selecciona la ficha" />
+          <AssignmentStep number="1" text="Selecciona una fecha creada" />
           <OptionPicker
-            emptyLabel="Primero crea una ficha"
-            options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
-            value={assignmentForm.fichaId}
-            onChange={(fichaId) => setAssignmentForm((current) => ({ ...current, fichaId }))}
+            emptyLabel="Primero crea fechas de trimestre"
+            options={activeTrimesters.map((trimester) => ({
+              label: `${trimester.fechaInicio || 'Inicio pendiente'} a ${trimester.fechaFin || 'Fin pendiente'}`,
+              value: trimester.id,
+            }))}
+            value={form.trimestreId}
+            onChange={(trimestreId) => setForm((current) => ({ ...current, trimestreId }))}
           />
-          <AssignmentStep number="2" text="Selecciona el trimestre" />
-          <OptionPicker
-            emptyLabel="Primero crea un trimestre"
-            options={activeTrimesters.map((trimester) => ({ label: `Trimestre ${trimester.numero} (${trimester.fechaInicio} a ${trimester.fechaFin})`, value: trimester.id }))}
-            value={assignmentForm.trimestreId}
-            onChange={(trimestreId) => setAssignmentForm((current) => ({ ...current, trimestreId }))}
+
+          <AssignmentStep number="2" text="Ingresa el número de trimestre" />
+          <AdminField
+            label="Número de trimestre"
+            keyboardType="numeric"
+            numericOnly
+            value={form.numero}
+            onInvalidInput={() => setFeedback('El número de trimestre solo debe contener números.')}
+            onChangeText={(numero) => setForm((current) => ({ ...current, numero }))}
           />
+
+          <AssignmentStep number="3" text="Busca y selecciona una o varias fichas" />
+          <SearchField
+            placeholder="Buscar ficha por número, programa o trimestre..."
+            value={sheetSearch}
+            onChangeText={setSheetSearch}
+          />
+          <View style={styles.multiSelectGrid}>
+            {filteredSheets.length ? filteredSheets.map((sheet) => {
+              const selected = form.fichaIds.includes(sheet.id);
+
+              return (
+                <Pressable
+                  key={`assign-${sheet.id}`}
+                  onPress={() => toggleSheet(sheet.id)}
+                  style={[styles.multiSelectChip, selected && styles.multiSelectChipActive]}>
+                  <Text style={[styles.multiSelectText, selected && styles.multiSelectTextActive]}>
+                    Ficha {sheet.numero || sheet.id}
+                  </Text>
+                  <Text style={[styles.multiSelectMeta, selected && styles.multiSelectTextActive]}>
+                    {sheet.programaNombre || 'Sin programa'}
+                  </Text>
+                </Pressable>
+              );
+            }) : <Text style={styles.optionEmptyText}>No hay fichas con esa búsqueda.</Text>}
+          </View>
+
           <AssignmentSummary
-            text={`Ficha ${selectedSheet?.numero || 'pendiente'} → Trimestre ${selectedTrimester?.numero || 'pendiente'}`}
+            text={`${selectedSheets.length || 0} ficha(s) → Trimestre ${form.numero || 'pendiente'} (${selectedTrimester?.fechaInicio || 'inicio'} a ${selectedTrimester?.fechaFin || 'fin'})`}
           />
-          <Pressable disabled={saving} onPress={submitTrimesterAssignment} style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>Asignar trimestre</Text>}
+          <Pressable disabled={saving || !selectedTrimester || !selectedSheets.length} onPress={submitSheetTrimester} style={[styles.formButton, (saving || !selectedTrimester || !selectedSheets.length) && styles.smallButtonDisabled]}>
+            {saving ? <ActivityIndicator color={palette.surface} /> : <Text style={styles.formButtonText}>Asignar trimestre a fichas</Text>}
           </Pressable>
         </View>
       </Section>
 
-      <Section title="Lista de trimestres" subtitle="Activa, edita o desactiva los trimestres creados">
-        {loading ? <LoadingRow text="Cargando trimestres..." /> : null}
-        {trimesters.map((trimester) => (
-          <TrimesterCard
-            key={trimester.id}
-            trimester={trimester}
-            onActivate={() => activarTrimestre(trimester.id)}
-            onDeactivate={() => desactivarTrimestre(trimester.id)}
-            onEdit={() =>
-              setForm({
-                id: trimester.id,
-                numero: String(trimester.numero || ''),
-                fechaInicio: trimester.fechaInicio || '',
-                fechaFin: trimester.fechaFin || '',
-              })
-            }
-          />
-        ))}
-      </Section>
-
-      <Section title="Fichas con trimestre" subtitle="Estado visible para los roles asignados a cada ficha">
-        {sheets.map((sheet, index) => (
-          <SheetCard
-            index={index}
-            key={sheet.id}
+      <Section title="Fichas con trimestre" subtitle="Busca una ficha para editar o quitar la asignación de trimestre">
+        <SearchField
+          placeholder="Buscar ficha por número, programa o trimestre..."
+          value={sheetSearch}
+          onChangeText={setSheetSearch}
+        />
+        {loading ? <LoadingRow text="Cargando fichas..." /> : null}
+        {filteredSheets.length ? filteredSheets.map((sheet, index) => (
+          <TrimesterSheetCard
+            key={`${sheet.id}-${sheet.numero || 'sin-numero'}-${sheet.trimestreNumero || 'sin-trimestre'}-${index}`}
             sheet={sheet}
-            onActivate={() => activarFicha(sheet.id)}
-            onDeactivate={() => desactivarFicha(sheet.id)}
-            onEdit={() => setAssignmentForm((current) => ({ ...current, fichaId: sheet.id }))}
+            onEdit={() => editSheetTrimester(sheet)}
+            onRemove={() => removeSheetTrimester(sheet)}
           />
-        ))}
+        )) : <FeedbackBox icon="magnify-close" text="No encontramos fichas con esa búsqueda." tone="info" />}
       </Section>
     </>
   );
 }
-
 function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
+  const [name, setName] = useState(session.name);
+  const [photoUri, setPhotoUri] = useState(session.photoUrl || '');
+  const [photoBase64, setPhotoBase64] = useState('');
+  const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  useEffect(() => {
+    setName(session.name);
+    setPhotoUri(session.photoUrl || '');
+  }, [session.name, session.photoUrl]);
+
+  const pickProfilePhoto = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      setFeedback('Necesitamos permiso para abrir tu galería y cambiar la foto.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.35,
+      base64: true,
+    });
+
+    if (result.canceled || !result.assets?.length) {
+      return;
+    }
+
+    const asset = result.assets[0];
+
+    if (!asset.base64) {
+      setFeedback('No pudimos preparar la foto para guardarla. Intenta con otra imagen.');
+      return;
+    }
+
+    setPhotoUri(asset.uri);
+    setPhotoBase64(asset.base64);
+    setPhotoMimeType(asset.mimeType || 'image/jpeg');
+    setFeedback('Foto lista para guardarse en tu perfil.');
+  };
+
+  const handleSaveProfile = async () => {
+    if (!name.trim()) {
+      setFeedback('Falta el nombre. Ingresa tu nombre antes de guardar el perfil.');
+      return;
+    }
+
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      const updatedProfile = await actualizarPerfilUsuario({
+        nombre: name,
+        fotoPerfilBase64: photoBase64 || undefined,
+        fotoPerfilMimeType: photoBase64 ? photoMimeType : undefined,
+      });
+      setPhotoBase64('');
+      if (updatedProfile?.fotoUrl) {
+        setPhotoUri(updatedProfile.fotoUrl);
+      }
+      setFeedback('Perfil actualizado correctamente.');
+    } catch (error) {
+      const typedError = error as { message?: string };
+      setFeedback(typedError?.message || 'No pudimos actualizar tu perfil.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
-      <View style={styles.profileShell}>
-        <View style={styles.adminProfilePanel}>
-          <View style={styles.adminAvatarWrap}>
-            <UserAvatar name={session.name} photoUrl={session.photoUrl} size={104} />
-            <Pressable style={styles.changePhotoButton} onPress={() => alert('Cambio de foto disponible desde los perfiles de usuario. En admin queda preparado visualmente.')}>
-              <Text style={styles.changePhotoText}>Cambiar foto</Text>
-            </Pressable>
+      <View style={styles.adminProfileCard}>
+        <Pressable onPress={pickProfilePhoto} style={styles.adminAvatarWrap}>
+          <UserAvatar name={name} photoUrl={photoUri || session.photoUrl} size={100} />
+          <View style={styles.changePhotoButton}>
+            <Text style={styles.changePhotoText}>Cambiar foto</Text>
           </View>
+        </Pressable>
 
-          <View style={styles.adminForm}>
-            <ProfileField label="Nombre" value={session.name} />
-            <ProfileField label="Correo" value={session.email} muted />
-          </View>
-
-          <View style={styles.profileButtonRow}>
-            <Pressable style={styles.saveProfileButton} onPress={() => alert('Perfil de administrador listo. Los datos vienen de la sesión actual.')}>
-              <Text style={styles.saveProfileText}>Guardar Perfil</Text>
-            </Pressable>
-            <Pressable onPress={onSignOut} style={styles.signOutButton}>
-              <Text style={styles.signOutText}>Cerrar sesión</Text>
-            </Pressable>
-          </View>
+        <View style={styles.adminForm}>
+          <ProfileField label="Nombre" value={name} onChangeText={setName} />
+          <ProfileField label="Correo" value={session.email} editable={false} />
+          <ProfileField label="Rol" value={session.role} editable={false} />
         </View>
-        <View style={styles.profileBottomBand} />
+
+        <View style={styles.profileButtonRow}>
+          <Pressable disabled={saving} style={[styles.saveProfileButton, saving && styles.smallButtonDisabled]} onPress={handleSaveProfile}>
+            {saving ? (
+              <ActivityIndicator color={palette.surface} />
+            ) : (
+              <Text style={styles.saveProfileText}>Guardar perfil</Text>
+            )}
+          </Pressable>
+          <Pressable onPress={onSignOut} style={styles.signOutButton}>
+            <Text style={styles.signOutText}>Cerrar sesión</Text>
+          </Pressable>
+        </View>
+
+        {feedback ? <Text style={styles.profileFeedbackText}>{feedback}</Text> : null}
       </View>
     </>
   );
 }
 
-function ProfileField({ label, muted = false, value }: { label: string; muted?: boolean; value: string }) {
+function ProfileField({
+  editable = true,
+  label,
+  muted = false,
+  onChangeText,
+  value,
+}: {
+  editable?: boolean;
+  label: string;
+  muted?: boolean;
+  onChangeText?: (value: string) => void;
+  value: string;
+}) {
+  const [isFocused, setIsFocused] = useState(false);
+
   return (
     <View style={styles.profileFieldBlock}>
-      <Text style={styles.profileFieldLabel}>{label}</Text>
+      <Text style={[styles.profileFieldLabel, isFocused && editable && { color: palette.primary }]}>
+        {label}
+      </Text>
       <TextInput
-        editable={false}
-        style={[styles.profileInput, muted && styles.profileInputMuted]}
+        editable={editable}
+        onBlur={() => setIsFocused(false)}
+        onChangeText={onChangeText}
+        onFocus={() => setIsFocused(true)}
+        placeholderTextColor={palette.muted}
+        style={[
+          styles.profileInput,
+          isFocused && editable && styles.profileInputActive,
+          (!editable || muted) && styles.profileInputMuted,
+        ]}
         value={value}
       />
     </View>
@@ -1305,12 +1715,14 @@ function MetricCard({
   label: string;
   value: string;
 }) {
+  const isEmpty = value === '0';
+
   return (
-    <View style={[styles.metricCard, { backgroundColor: `${accent}28` }]}>
-      <View style={[styles.metricIcon, { backgroundColor: accent }]}>
-        <MaterialCommunityIcons name={icon} size={20} color={palette.surface} />
+    <View style={[styles.metricCard, isEmpty ? styles.metricCardEmpty : { backgroundColor: `${accent}28` }]}>
+      <View style={[styles.metricIcon, { backgroundColor: isEmpty ? '#E4E4E0' : accent }]}>
+        <MaterialCommunityIcons name={icon} size={18} color={isEmpty ? palette.muted : palette.surface} />
       </View>
-      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={[styles.metricValue, isEmpty && styles.metricValueEmpty]}>{value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
     </View>
   );
@@ -1329,7 +1741,7 @@ function QuickAction({
 }) {
   const toneByLabel: Record<string, { accent: string; soft: string }> = {
     Usuarios: { accent: palette.mintText, soft: palette.mint },
-    Academico: { accent: palette.yellowText, soft: palette.yellow },
+    Académico: { accent: palette.yellowText, soft: palette.yellow },
     Trimestres: { accent: palette.greenText, soft: palette.greenSoft },
     Seguimiento: { accent: palette.salmonText, soft: palette.salmon },
   };
@@ -1338,10 +1750,12 @@ function QuickAction({
   return (
     <Pressable onPress={onPress} style={[styles.quickAction, { backgroundColor: tone.soft }]}>
       <View style={[styles.quickIcon, { backgroundColor: tone.accent }]}>
-        <MaterialCommunityIcons name={icon} size={21} color={palette.surface} />
+        <MaterialCommunityIcons name={icon} size={18} color={palette.surface} />
       </View>
-      <Text style={[styles.quickTitle, { color: tone.accent }]}>{label}</Text>
-      <Text style={styles.quickText}>{text}</Text>
+      <View style={styles.quickCopy}>
+        <Text style={[styles.quickTitle, { color: tone.accent }]} numberOfLines={1}>{label}</Text>
+        <Text style={styles.quickText} numberOfLines={2}>{text}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -1440,6 +1854,120 @@ function FeedbackBox({
   );
 }
 
+function SearchField({
+  onChangeText,
+  placeholder,
+  value,
+}: {
+  onChangeText: (value: string) => void;
+  placeholder: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.searchBox}>
+      <MaterialCommunityIcons name="magnify" size={18} color={palette.muted} />
+      <TextInput
+        autoCapitalize="none"
+        placeholder={placeholder}
+        placeholderTextColor={palette.muted}
+        style={styles.searchInput}
+        value={value}
+        onChangeText={onChangeText}
+      />
+    </View>
+  );
+}
+
+function AcademicSectionNav({
+  activeSection,
+  onChange,
+}: {
+  activeSection: AcademicSectionId;
+  onChange: (section: AcademicSectionId) => void;
+}) {
+  return (
+    <View style={styles.tabBarWrap}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabBarContent}>
+        {academicSectionOptions.map((section) => {
+          const active = activeSection === section.id;
+
+          return (
+            <Pressable
+              key={section.id}
+              onPress={() => onChange(section.id)}
+              style={styles.tabItem}>
+              <View style={[styles.tabIconWrap, active && styles.tabIconWrapActive]}>
+                <MaterialCommunityIcons
+                  name={section.icon}
+                  size={16}
+                  color={active ? palette.surface : palette.academicInk}
+                />
+              </View>
+              <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
+                {section.label}
+              </Text>
+              <View style={[styles.tabUnderline, active && styles.tabUnderlineActive]} />
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function TrimesterSheetCard({
+  onEdit,
+  onRemove,
+  sheet,
+}: {
+  onEdit: () => void;
+  onRemove: () => void;
+  sheet: AcademicSheet;
+}) {
+  const hasTrimester = Boolean(sheet.trimestreNumero || sheet.trimestreActual);
+
+  return (
+    <View style={styles.trimesterCard}>
+      <View style={styles.trimesterTop}>
+        <View style={styles.trimesterTitleRow}>
+          <View style={styles.sheetNumberBadge}>
+            <Text style={styles.sheetNumberText}>{sheet.trimestreNumero || '?'}</Text>
+          </View>
+          <View style={styles.trimesterCopy}>
+            <Text style={styles.sheetTitle}>Ficha {sheet.numero || sheet.id}</Text>
+            <Text style={styles.sheetProgram}>{sheet.programaNombre || 'Sin programa'}</Text>
+          </View>
+        </View>
+        <View style={styles.trimesterStatusWrap}>
+          <StatusPill label={hasTrimester ? 'Asignado' : 'Sin asignar'} tone={hasTrimester ? 'success' : 'danger'} />
+        </View>
+      </View>
+
+      <View style={styles.timeline}>
+        <TimelineDot active label="Trimestre" value={sheet.trimestreActual || 'Pendiente'} />
+        <TimelineDot active label="Inicio" value={sheet.trimestreFechaInicio || 'Pendiente'} />
+        <TimelineDot label="Fin" value={sheet.trimestreFechaFin || 'Pendiente'} />
+      </View>
+
+      <View style={styles.cardActions}>
+        <Pressable onPress={onEdit} style={styles.ghostButton}>
+          <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
+          <Text style={styles.ghostButtonText}>{hasTrimester ? 'Editar' : 'Asignar'}</Text>
+        </Pressable>
+        {hasTrimester ? (
+          <Pressable onPress={onRemove} style={styles.dangerButton}>
+            <MaterialCommunityIcons name="calendar-remove-outline" size={16} color={palette.danger} />
+            <Text style={styles.dangerButtonText}>Quitar</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function PermissionRow({ icon, role, text }: { icon: AdminIconName; role: string; text: string }) {
   return (
     <View style={styles.permissionRow}>
@@ -1477,6 +2005,7 @@ function ProgramCard({
           <View>
             <Text style={styles.sheetTitle}>{program.codigo || 'Programa'}</Text>
             <Text style={styles.sheetProgram}>{program.nombre || 'Sin nombre'}</Text>
+            <Text style={styles.cardMeta}>{program.tipoFormacion || 'Tipo de formación pendiente'}</Text>
           </View>
         </View>
         <StatusPill label={inactive ? 'Inactivo' : 'Activo'} tone={inactive ? 'danger' : 'success'} />
@@ -1538,7 +2067,7 @@ function SheetCard({
       </View>
       <View style={styles.assignmentBox}>
         <AssignmentLine icon="book-education-outline" label="Programa" value={sheet.programaNombre || 'Pendiente'} />
-        <AssignmentLine icon="link-variant" label="Relacion" value={`${sheet.programaNombre || 'Programa'} / Ficha ${sheet.numero || ''}`} />
+        <AssignmentLine icon="link-variant" label="Relación" value={`${sheet.programaNombre || 'Programa'} / Ficha ${sheet.numero || ''}`} />
         <AssignmentLine icon="calendar-check-outline" label="Trimestre" value={sheet.trimestreActual || 'Sin asignar'} />
       </View>
       {demo ? (
@@ -1698,6 +2227,79 @@ function SimpleAdminCard({
   );
 }
 
+function ScrollableAdminList({
+  children,
+  emptyText,
+  onSearchChange,
+  placeholder,
+  search,
+}: {
+  children: ReactNode;
+  emptyText: string;
+  onSearchChange: (value: string) => void;
+  placeholder: string;
+  search: string;
+}) {
+  const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
+
+  return (
+    <View style={styles.adminListBlock}>
+      <SearchField placeholder={placeholder} value={search} onChangeText={onSearchChange} />
+      {items.length ? (
+        <ScrollView nestedScrollEnabled style={styles.adminListScroll} contentContainerStyle={styles.adminListContent}>
+          {items}
+        </ScrollView>
+      ) : (
+        <FeedbackBox icon="magnify-close" text={emptyText} tone="info" />
+      )}
+    </View>
+  );
+}
+
+function RelationGroup({
+  emptyText,
+  items,
+  onRemove,
+  title,
+}: {
+  emptyText: string;
+  items: AdminUser[];
+  onRemove: (user: AdminUser) => void;
+  title: string;
+}) {
+  const [query, setQuery] = useState('');
+  const filteredItems = items.filter((user) =>
+    `${user.nombre || ''} ${user.correo || ''} ${user.identificacion || ''}`.toLowerCase().includes(query.trim().toLowerCase())
+  );
+
+  return (
+    <View style={styles.relationGroup}>
+      <Text style={styles.relationGroupTitle}>{title}</Text>
+      <SearchField
+        placeholder={`Buscar en ${title.toLowerCase()}...`}
+        value={query}
+        onChangeText={setQuery}
+      />
+      {items.length ? (
+        <ScrollView nestedScrollEnabled style={styles.relationScroll} contentContainerStyle={styles.relationScrollContent}>
+          {filteredItems.length ? filteredItems.map((user) => (
+            <View key={`${title}-${user.id}`} style={styles.relationRow}>
+              <View style={styles.userCopy}>
+                <Text style={styles.cardMeta}>{user.nombre || user.correo || user.id}</Text>
+                <Text style={styles.cardText}>{user.correo || 'Sin correo'}</Text>
+              </View>
+              <Pressable onPress={() => onRemove(user)} style={styles.dangerButton}>
+                <MaterialCommunityIcons name="link-variant-off" size={16} color={palette.danger} />
+                <Text style={styles.dangerButtonText}>Quitar</Text>
+              </Pressable>
+            </View>
+          )) : <Text style={styles.cardText}>No hay resultados para esa búsqueda.</Text>}
+        </ScrollView>
+      ) : <Text style={styles.cardText}>{emptyText}</Text>}
+    </View>
+  );
+}
+
 function AssignmentStep({ number, text }: { number: string; text: string }) {
   return (
     <View style={styles.assignmentStep}>
@@ -1715,24 +2317,37 @@ function AssignmentSummary({ text }: { text: string }) {
     </View>
   );
 }
-
 function AdminField({
   keyboardType = 'default',
   label,
   onChangeText,
+  onInvalidInput,
+  numericOnly = false,
   value,
 }: {
   keyboardType?: 'default' | 'numeric';
   label: string;
   onChangeText: (value: string) => void;
+  onInvalidInput?: () => void;
+  numericOnly?: boolean;
   value: string;
 }) {
+  const handleChangeText = (nextValue: string) => {
+    if (numericOnly && /[^0-9]/.test(nextValue)) {
+      onInvalidInput?.();
+      onChangeText(nextValue.replace(/\D/g, ''));
+      return;
+    }
+
+    onChangeText(nextValue);
+  };
+
   return (
     <View style={styles.adminField}>
       <Text style={styles.profileFieldLabel}>{label}</Text>
       <TextInput
         keyboardType={keyboardType}
-        onChangeText={onChangeText}
+        onChangeText={handleChangeText}
         placeholderTextColor={palette.muted}
         style={styles.profileInput}
         value={value}
@@ -1854,25 +2469,63 @@ function OptionPicker({
   options: { label: string; value: string }[];
   value: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const sortedOptions = useMemo(
+    () => [...options].sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true, sensitivity: 'base' })),
+    [options]
+  );
+  const filteredOptions = sortedOptions.filter((option) =>
+    option.label.toLowerCase().includes(query.trim().toLowerCase())
+  );
+  const selectedOption = options.find((option) => option.value === value);
+
   if (!options.length) {
     return <FeedbackBox icon="information-outline" text={emptyLabel} tone="info" />;
   }
 
   return (
-    <View style={styles.optionWrap}>
-      {options.map((option) => (
-        <Pressable
-          key={option.value}
-          onPress={() => onChange(option.value)}
-          style={[styles.optionChip, value === option.value && styles.optionChipActive]}>
-          {value === option.value ? (
-            <MaterialCommunityIcons name="check-circle" size={16} color={palette.dark} />
-          ) : null}
-          <Text style={[styles.optionChipText, value === option.value && styles.optionChipTextActive]}>
-            {option.label}
-          </Text>
-        </Pressable>
-      ))}
+    <View style={styles.optionSelect}>
+      <Pressable onPress={() => setOpen((current) => !current)} style={styles.optionSelectButton}>
+        <Text style={[styles.optionSelectText, !selectedOption && styles.optionSelectPlaceholder]}>
+          {selectedOption?.label || 'Seleccionar opcion'}
+        </Text>
+        <MaterialCommunityIcons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={palette.primary} />
+      </Pressable>
+
+      {open ? (
+        <View style={styles.optionDropdown}>
+          <View style={styles.optionSearchBox}>
+            <MaterialCommunityIcons name="magnify" size={17} color={palette.muted} />
+            <TextInput
+              autoCapitalize="none"
+              placeholder="Buscar..."
+              placeholderTextColor={palette.muted}
+              style={styles.optionSearchInput}
+              value={query}
+              onChangeText={setQuery}
+            />
+          </View>
+
+          {filteredOptions.length ? filteredOptions.map((option, index) => (
+            <Pressable
+              key={`${option.value}-${option.label}-${index}`}
+              onPress={() => {
+                onChange(option.value);
+                setOpen(false);
+                setQuery('');
+              }}
+              style={[styles.optionChip, value === option.value && styles.optionChipActive]}>
+              {value === option.value ? (
+                <MaterialCommunityIcons name="check-circle" size={16} color={palette.dark} />
+              ) : null}
+              <Text style={[styles.optionChipText, value === option.value && styles.optionChipTextActive]}>
+                {index + 1}. {option.label}
+              </Text>
+            </Pressable>
+          )) : <Text style={styles.optionEmptyText}>No hay resultados para esa búsqueda.</Text>}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1948,7 +2601,7 @@ function PageTitle({ icon, subtitle, title }: { icon: AdminIconName; subtitle: s
   return (
     <View style={styles.pageWrap}>
       <View style={styles.pageTitle}>
-        <Text style={styles.pageLabel}>{title === 'Usuarios' ? 'GESTION DE USUARIOS' : title === 'Academico' ? 'GESTION DE ACADEMICA' : 'GESTION DE TRIMESTRES'}</Text>
+        <Text style={styles.pageLabel}>{title === 'Usuarios' ? 'GESTIÓN DE USUARIOS' : title === 'Académico' ? 'GESTIÓN ACADÉMICA' : 'GESTIÓN DE TRIMESTRES'}</Text>
         <Text style={styles.pageMainTitle}>{title}</Text>
         <Text style={styles.sectionSubtitle}>{subtitle}</Text>
       </View>
@@ -2025,7 +2678,7 @@ const styles = StyleSheet.create({
     marginHorizontal: -20,
     paddingBottom: 20,
     paddingHorizontal: 28,
-    paddingTop: 60,
+    paddingTop: 20,
   },
   headerTopRow: {
     alignItems: 'center',
@@ -2115,7 +2768,7 @@ const styles = StyleSheet.create({
     lineHeight: 13,
   },
   sectionBlock: {
-    backgroundColor: '#EEEEEE',
+    backgroundColor: '#F4F5F4',
     gap: 12,
     marginHorizontal: -20,
     paddingHorizontal: 20,
@@ -2147,21 +2800,27 @@ const styles = StyleSheet.create({
   quickAction: {
     backgroundColor: palette.soft,
     borderColor: 'transparent',
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     flexBasis: '47%',
     flexGrow: 1,
-    gap: 8,
-    minHeight: 112,
-    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 72,
+    padding: 12,
   },
   quickIcon: {
     alignItems: 'center',
     backgroundColor: palette.soft,
-    borderRadius: 18,
-    height: 36,
+    borderRadius: 16,
+    height: 32,
     justifyContent: 'center',
-    width: 36,
+    width: 32,
+  },
+  quickCopy: {
+    flex: 1,
+    gap: 2,
   },
   quickTitle: {
     color: palette.dark,
@@ -2192,6 +2851,14 @@ const styles = StyleSheet.create({
     minHeight: 72,
     padding: 12,
   },
+  flowCardEmpty: {
+    backgroundColor: '#FAFAF8',
+    borderColor: '#EDEDE9',
+  },
+  flowNumberEmpty: {
+    color: palette.muted,
+  },
+
   flowNumber: {
     color: palette.dark,
     fontFamily: 'PoppinsSemiBold',
@@ -2428,25 +3095,29 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     height: 36,
     justifyContent: 'center',
-    width: 36,
+    width: 40,
   },
   sheetNumberText: {
     color: palette.primary,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 14,
     lineHeight: 18,
+    maxWidth: 40,
   },
   sheetTitle: {
     color: palette.dark,
+    flexShrink: 1,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 15,
     lineHeight: 20,
   },
   sheetProgram: {
     color: '#9FB3A0',
+    flexShrink: 1,
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 17,
+    maxWidth: 240,
   },
   sheetStats: {
     flexDirection: 'row',
@@ -2454,7 +3125,6 @@ const styles = StyleSheet.create({
     paddingLeft: 49,
   },
   miniStat: {
-    alignItems: 'center',
     backgroundColor: palette.soft,
     borderRadius: 999,
     flex: 0,
@@ -2670,6 +3340,97 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
+  optionSelect: {
+    gap: 8,
+  },
+  optionSelectButton: {
+    alignItems: 'center',
+    backgroundColor: '#F6F8F6',
+    borderColor: '#DDE8E2',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  optionSelectText: {
+    color: palette.ink,
+    flex: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  optionSelectPlaceholder: {
+    color: palette.muted,
+    fontFamily: 'PoppinsRegular',
+  },
+  optionDropdown: {
+    backgroundColor: palette.surface,
+    borderColor: '#DDE8E2',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 8,
+    maxHeight: 320,
+    padding: 10,
+  },
+  optionSearchBox: {
+    alignItems: 'center',
+    backgroundColor: '#F6F8F6',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  optionSearchInput: {
+    color: palette.ink,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    padding: 0,
+  },
+  optionEmptyText: {
+    color: palette.muted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 17,
+    padding: 8,
+  },
+  multiSelectGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  multiSelectChip: {
+    backgroundColor: '#F6F8F6',
+    borderColor: '#DDE8E2',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexBasis: '47%',
+    flexGrow: 1,
+    gap: 3,
+    minHeight: 58,
+    padding: 12,
+  },
+  multiSelectChipActive: {
+    backgroundColor: palette.greenSoft,
+    borderColor: palette.greenText,
+  },
+  multiSelectText: {
+    color: palette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  multiSelectMeta: {
+    color: palette.muted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  multiSelectTextActive: {
+    color: palette.greenText,
+  },
   optionChip: {
     alignItems: 'center',
     backgroundColor: '#F6F8F6',
@@ -2695,6 +3456,104 @@ const styles = StyleSheet.create({
     color: palette.dark,
     fontFamily: 'PoppinsSemiBold',
   },
+  searchBox: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderColor: '#E4EEE9',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  searchInput: {
+    color: palette.ink,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    padding: 0,
+  },
+  sectionNavGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  sectionNavChip: {
+    alignItems: 'center',
+    backgroundColor: '#FDFBF6',
+    borderColor: '#E4EEE9',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  sectionNavChipActive: {
+    backgroundColor: '#E8F8DF',
+    borderColor: '#9DD89F',
+  },
+  sectionNavIcon: {
+    alignItems: 'center',
+    backgroundColor: '#EEF8E9',
+    borderRadius: 999,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  sectionNavIconActive: {
+    backgroundColor: palette.green,
+  },
+  sectionNavText: {
+    color: palette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  sectionNavTextActive: {
+    color: palette.greenText,
+  },
+  sectionNavNumber: {
+    color: palette.greenText,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  relationGroup: {
+    backgroundColor: '#F8F8F8',
+    borderRadius: 14,
+    gap: 8,
+    padding: 12,
+  },
+  relationGroupTitle: {
+    color: palette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  adminListBlock: {
+    gap: 10,
+  },
+  adminListScroll: {
+    maxHeight: 420,
+  },
+  adminListContent: {
+    gap: 12,
+    paddingBottom: 2,
+  },
+  relationScroll: {
+    maxHeight: 220,
+  },
+  relationScrollContent: {
+    gap: 8,
+    paddingBottom: 2,
+  },
+  relationRow: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 8,
+    padding: 10,
+  },
   statusPill: {
     borderRadius: 999,
     fontFamily: 'PoppinsSemiBold',
@@ -2702,6 +3561,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     paddingHorizontal: 10,
     paddingVertical: 6,
+
   },
   cardActions: {
     flexDirection: 'row',
@@ -2780,10 +3640,26 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
   },
   trimesterTop: {
-    alignItems: 'center',
+    alignItems: 'flex-start',
     flexDirection: 'row',
     gap: 12,
     justifyContent: 'space-between',
+  },
+  trimesterTitleRow: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 13,
+    minWidth: 0,
+  },
+  trimesterCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  trimesterStatusWrap: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    maxWidth: 104,
   },
   trimesterBadge: {
     alignItems: 'center',
@@ -2800,6 +3676,7 @@ const styles = StyleSheet.create({
   },
   timeline: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 9,
     paddingLeft: 49,
   },
@@ -2807,9 +3684,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: palette.soft,
     borderRadius: 999,
+    flexGrow: 1,
+    flexShrink: 1,
     justifyContent: 'center',
     minHeight: 38,
-    minWidth: 86,
+    minWidth: 92,
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
@@ -2824,6 +3703,7 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 11,
     lineHeight: 14,
+    textAlign: 'center',
   },
   profileCard: {
     alignItems: 'center',
@@ -2834,10 +3714,26 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 20,
   },
+  adminProfileCard: {
+    backgroundColor: palette.surface,
+    elevation: 3,
+    gap: 12,
+    marginHorizontal: -30,
+    paddingHorizontal: 40,
+    paddingTop: 30,
+    paddingVertical: 20,
+    shadowColor: palette.dark,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+  },
   profileShell: {
-    backgroundColor: '#F3F3F3',
-    marginHorizontal: -20,
-    minHeight: 650,
+    backgroundColor: palette.surface,
+    gap: 8,
+    marginHorizontal: -30,
+    paddingHorizontal: 40,
+    paddingTop: 30,
+    paddingVertical: 20,
   },
   profileTopBand: {
     backgroundColor: '#ECECEC',
@@ -2857,6 +3753,7 @@ const styles = StyleSheet.create({
     height: 128,
   },
   adminAvatarWrap: {
+    alignSelf: 'center',
     alignItems: 'center',
     gap: 10,
   },
@@ -2872,12 +3769,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   adminForm: {
-    gap: 14,
+    gap: 10,
     maxWidth: 330,
     width: '100%',
   },
   profileFieldBlock: {
-    gap: 6,
+    gap: 9,
   },
   profileFieldLabel: {
     color: palette.dark,
@@ -2885,16 +3782,25 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   profileInput: {
-    backgroundColor: palette.surface,
+    backgroundColor: '#FBFBFB',
     borderColor: '#CFCFCF',
     borderRadius: 999,
     borderWidth: 1,
     color: palette.ink,
     fontFamily: 'PoppinsRegular',
-    fontSize: 12,
-    height: 36,
-    paddingHorizontal: 16,
-    paddingVertical: 7,
+    fontSize: 13,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    shadowColor: palette.dark,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  profileInputActive: {
+    backgroundColor: palette.surface,
+    borderColor: palette.primary,
+    shadowColor: palette.primary,
+    shadowOpacity: 0.12,
   },
   profileInputMuted: {
     backgroundColor: '#E7E7E7',
@@ -2918,6 +3824,34 @@ const styles = StyleSheet.create({
     color: palette.surface,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
+  },
+  profileFeedbackText: {
+    color: palette.primary,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  adminProfileInfoCard: {
+    backgroundColor: palette.soft,
+    borderColor: palette.border,
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 4,
+    marginTop: 8,
+    padding: 14,
+    width: '100%',
+  },
+  fichasTitle: {
+    color: palette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  fichaItem: {
+    color: palette.ink,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 17,
   },
   profileStats: {
     flexDirection: 'row',
@@ -2951,6 +3885,86 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
   },
+  academicHeader: {
+    backgroundColor: palette.surface,
+    gap: 6,
+    marginHorizontal: -20,
+    paddingHorizontal: 28,
+    paddingTop: 30,
+    paddingBottom: 18,
+  },
+  academicEyebrow: {
+    color: palette.primary,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 10,
+    letterSpacing: 1.4,
+  },
+  academicTitle: {
+    color: palette.academicInk,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 30,
+    lineHeight: 34,
+  },
+  academicSubtitle: {
+    color: palette.muted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  tabBarWrap: {
+    backgroundColor: palette.surface,
+    borderBottomColor: palette.academicLine,
+    borderBottomWidth: 1,
+    marginHorizontal: -20,
+  },
+  tabBarContent: {
+    gap: 22,
+    paddingHorizontal: 28,
+  },
+  tabItem: {
+    alignItems: 'center',
+    gap: 6,
+    paddingBottom: 12,
+    paddingTop: 6,
+    width: 84,
+  },
+  tabIconWrap: {
+    alignItems: 'center',
+    backgroundColor: palette.academicChipBg,
+    borderRadius: 999,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
+  },
+  tabIconWrapActive: {
+    backgroundColor: palette.primary,
+  },
+  tabLabel: {
+    color: palette.muted,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
+    lineHeight: 14,
+    height: 28,
+    textAlign: 'center',
+  },
+  tabLabelActive: {
+    color: palette.academicInk,
+    fontFamily: 'PoppinsSemiBold',
+  },
+  tabUnderline: {
+    backgroundColor: 'transparent',
+    borderRadius: 2,
+    height: 3,
+    width: '100%',
+  },
+  tabUnderlineActive: {
+    backgroundColor: palette.primary,
+  },
+  metricCardEmpty: {
+    backgroundColor: '#EFEFEC',
+  },
+  metricValueEmpty: {
+    color: palette.muted,
+  },
 });
-
 

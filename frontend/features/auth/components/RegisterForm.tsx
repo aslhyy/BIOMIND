@@ -108,19 +108,31 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   };
 
   const handleRegister = async () => {
-    const requiredValues = [
-      form.nombre,
-      form.identificacion,
-      form.correo,
-      form.contrasena,
-      form.confirmarContrasena,
+    const requiredFields = [
+      { value: form.nombre, title: 'Falta el nombre', message: 'Ingresa tu nombre completo.' },
+      { value: form.identificacion, title: 'Falta la identificación', message: 'Ingresa tu número de identificación.' },
+      { value: form.correo, title: 'Falta el correo', message: 'Ingresa tu correo electrónico.' },
+      { value: form.contrasena, title: 'Falta la contraseña', message: 'Crea una contraseña para tu cuenta.' },
+      { value: form.confirmarContrasena, title: 'Falta confirmar la contraseña', message: 'Repite tu contraseña para confirmar que coincide.' },
+      { value: form.fotoPerfilBase64, title: 'Falta la foto', message: 'Selecciona una foto de perfil antes de registrarte.' },
     ];
 
-    if (requiredValues.some((value) => !value.trim())) {
+    const missingField = requiredFields.find((field) => !field.value.trim());
+
+    if (missingField) {
       showAlert({
         variant: 'warning',
-        title: 'Faltan datos',
-        message: 'Completa todos los campos obligatorios antes de registrarte.',
+        title: missingField.title,
+        message: missingField.message,
+      });
+      return;
+    }
+
+    if (!/^\d+$/.test(form.identificacion.trim())) {
+      showAlert({
+        variant: 'warning',
+        title: 'Identificación inválida',
+        message: 'La identificación solo debe contener números.',
       });
       return;
     }
@@ -184,7 +196,10 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
   };
 
   return (
-    <ScrollView showsVerticalScrollIndicator={true} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      contentContainerStyle={{ paddingBottom: 56 }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={true}>
       <Pressable onPress={onBack} style={registerStyles.backRow}>
         <Ionicons name="arrow-back-outline" size={20} color="#2FC4B1" />
         <Text style={registerStyles.backText}>Volver</Text>
@@ -230,7 +245,16 @@ export function RegisterForm({ onBack, onGoLogin, onRegistered, showAlert }: Reg
         placeholder="Número de identificación"
         value={form.identificacion}
         onBlur={() => animateFocus('identificacion', 0)}
-        onChangeText={(value) => update('identificacion', value)}
+        onChangeText={(value) => {
+          if (/[^0-9]/.test(value)) {
+            showAlert({
+              variant: 'warning',
+              title: 'Solo números',
+              message: 'La identificación no debe tener letras ni símbolos.',
+            });
+          }
+          update('identificacion', value.replace(/\D/g, ''));
+        }}
         onFocus={() => animateFocus('identificacion', 1)}
       />
 

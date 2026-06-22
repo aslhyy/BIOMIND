@@ -18,6 +18,7 @@ export function LearnerHistoryTab() {
   const [draftTitle, setDraftTitle] = useState('Nueva bitácora manual');
   const [draftBody, setDraftBody] = useState('');
   const [draftImageLabel, setDraftImageLabel] = useState('Foto_cultivo_semana_5.jpg');
+  const [feedback, setFeedback] = useState('');
   const activeProject = learnerProjects[0];
 
   const editingBitacora = useMemo(
@@ -26,6 +27,16 @@ export function LearnerHistoryTab() {
   );
 
   const handleCreateBitacora = () => {
+    if (!draftTitle.trim()) {
+      setFeedback('Falta el titulo de la bitacora.');
+      return;
+    }
+
+    if (!draftBody.trim()) {
+      setFeedback('Falta la descripcion de la bitacora.');
+      return;
+    }
+
     const newBitacora: LearnerBitacora = {
       id: `bit-${Date.now()}`,
       projectId: activeProject.id,
@@ -36,12 +47,24 @@ export function LearnerHistoryTab() {
       status: 'Borrador',
     };
 
+    if (!draftTitle.trim()) {
+      setFeedback('Falta el titulo de la bitacora.');
+      return;
+    }
+
+    if (!draftBody.trim()) {
+      setFeedback('Falta la descripcion de la bitacora.');
+      return;
+    }
+
     setBitacoras((current) => [newBitacora, ...current]);
     setEditingBitacoraId(newBitacora.id);
+    setFeedback('Bitacora creada como borrador.');
   };
 
   const handleUpdateBitacora = () => {
     if (!editingBitacora) {
+      setFeedback('Selecciona una bitacora para editar.');
       return;
     }
 
@@ -57,16 +80,19 @@ export function LearnerHistoryTab() {
           : entry
       )
     );
+    setFeedback('Bitacora actualizada.');
   };
 
   const handleDeleteBitacora = () => {
     if (!editingBitacora) {
+      setFeedback('Selecciona una bitacora para eliminar.');
       return;
     }
 
     const nextEntries = bitacoras.filter((entry) => entry.id !== editingBitacora.id);
     setBitacoras(nextEntries);
     setEditingBitacoraId(nextEntries[0]?.id || '');
+    setFeedback('Bitacora eliminada.');
   };
 
   return (
@@ -355,6 +381,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginTop: 20,
+  },
+  feedbackText: {
+    color: learnerPalette.secondary,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 12,
+    lineHeight: 18,
   },
   actionPill: {
     paddingHorizontal: 14,

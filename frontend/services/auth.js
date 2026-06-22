@@ -1,5 +1,6 @@
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   reload,
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -9,18 +10,21 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   deleteField,
   doc,
   getDoc,
   getDocs,
   limit,
   query,
+  runTransaction,
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
 const USUARIOS_COLLECTION = 'usuarios';
+const IDENTIFICACIONES_COLLECTION = 'identificacionesRegistro';
 
 function createFlowError(code, message, extra = {}) {
   const error = new Error(message);
@@ -163,6 +167,34 @@ async function resolverRolInicial() {
   }
 }
 
+function normalizeIdentification(identificacion) {
+  return String(identificacion || '').trim();
+}
+
+async function reservarIdentificacionUnica(uid, identificacion) {
+  const normalizedIdentification = normalizeIdentification(identificacion);
+  const identificationRef = doc(db, IDENTIFICACIONES_COLLECTION, normalizedIdentification);
+
+  await runTransaction(db, async (transaction) => {
+    const snapshot = await transaction.get(identificationRef);
+
+    if (snapshot.exists()) {
+      throw createFlowError(
+        'auth/identification-already-in-use',
+        'Ese número de identificación ya está registrado en Biomind.'
+      );
+    }
+
+    transaction.set(identificationRef, {
+      uid,
+      identificacion: normalizedIdentification,
+      creadoEn: new Date(),
+    });
+  });
+
+  return identificationRef;
+}
+
 async function restaurarPerfilAuthExistente(form) {
   const {
     correo,
@@ -172,6 +204,7 @@ async function restaurarPerfilAuthExistente(form) {
     fotoPerfilBase64,
     fotoPerfilMimeType,
   } = form;
+  const normalizedIdentification = normalizeIdentification(identificacion);
 
   let cred;
 
@@ -184,6 +217,9 @@ async function restaurarPerfilAuthExistente(form) {
     );
   }
 
+  let identificationReservationRef = null;
+  let profileCreated = false;
+
   try {
     const userRef = doc(db, USUARIOS_COLLECTION, cred.user.uid);
     const snapshot = await getDoc(userRef);
@@ -192,12 +228,13 @@ async function restaurarPerfilAuthExistente(form) {
       throw createFlowError('auth/email-already-in-use', 'Ese correo ya tiene una cuenta en Biomind.');
     }
 
+    identificationReservationRef = await reservarIdentificacionUnica(cred.user.uid, normalizedIdentification);
     const fotoUrl = await prepareProfilePhoto(fotoPerfilBase64, fotoPerfilMimeType);
     const rolInicial = await resolverRolInicial();
     const profileData = buildUserProfile({
       uid: cred.user.uid,
       nombre,
-      identificacion,
+      identificacion: normalizedIdentification,
       programaId: null,
       programa: null,
       fichaId: null,
@@ -209,6 +246,7 @@ async function restaurarPerfilAuthExistente(form) {
     });
 
     await completarRegistroUsuario(cred.user, profileData, fotoUrl);
+    profileCreated = true;
 
     const verificationDelivery = await enviarCorreoVerificacionUsuario(cred.user);
     await guardarEstadoVerificacion(userRef, verificationDelivery.alreadyVerified);
@@ -220,6 +258,16 @@ async function restaurarPerfilAuthExistente(form) {
       rol: rolInicial,
       correoVerificacionEnviada: !verificationDelivery.alreadyVerified,
     };
+  } catch (error) {
+    if (identificationReservationRef && !profileCreated) {
+      try {
+        await deleteDoc(identificationReservationRef);
+      } catch {
+        // ignore cleanup failures
+      }
+    }
+
+    throw error;
   } finally {
     try {
       await signOut(auth);
@@ -240,12 +288,26 @@ export async function registrar(form) {
   } = form;
   let cred;
   let profileCreated = false;
+  let identificationReservationRef = null;
+  const normalizedIdentification = normalizeIdentification(identificacion);
+
+  if (!normalizedIdentification) {
+    throw createFlowError('auth/missing-identification', 'Ingresa tu número de identificación.');
+  }
+
+  if (!/^\d+$/.test(normalizedIdentification)) {
+    throw createFlowError('auth/invalid-identification', 'La identificación solo debe contener números.');
+  }
+
+  if (!String(fotoPerfilBase64 || '').trim()) {
+    throw createFlowError('auth/missing-photo', 'Selecciona una foto de perfil antes de registrarte.');
+  }
 
   try {
     cred = await createUserWithEmailAndPassword(auth, correo, contrasena);
   } catch (error) {
     if (error?.code === 'auth/email-already-in-use') {
-      return restaurarPerfilAuthExistente(form);
+      throw createFlowError('auth/email-already-in-use', 'Ese correo ya tiene una cuenta en Biomind.');
     }
 
     throw error;
@@ -254,12 +316,15 @@ export async function registrar(form) {
   const userRef = doc(db, USUARIOS_COLLECTION, cred.user.uid);
 
   try {
+    await cred.user.getIdToken(true);
+    identificationReservationRef = await reservarIdentificacionUnica(cred.user.uid, normalizedIdentification);
+
     const fotoUrl = await prepareProfilePhoto(fotoPerfilBase64, fotoPerfilMimeType);
     const rolInicial = await resolverRolInicial();
     const profileData = buildUserProfile({
       uid: cred.user.uid,
       nombre,
-      identificacion,
+      identificacion: normalizedIdentification,
       programaId: null,
       programa: null,
       fichaId: null,
@@ -306,6 +371,26 @@ export async function registrar(form) {
         'La cuenta fue creada, pero Firebase no pudo enviar el correo. Inicia sesión y usa Reenviar correo.',
         { correo }
       );
+    }
+
+    if (identificationReservationRef && !profileCreated) {
+      try {
+        await deleteDoc(identificationReservationRef);
+      } catch {
+        // ignore cleanup failures
+      }
+    }
+
+    if (cred?.user && !profileCreated) {
+      try {
+        await deleteUser(cred.user);
+      } catch {
+        try {
+          await signOut(auth);
+        } catch {
+          // ignore cleanup failures
+        }
+      }
     }
 
     throw error;

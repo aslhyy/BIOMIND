@@ -94,7 +94,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
               welcomeMessage="Hola. Soy tu asistente de Biomind con Gemini. Puedo ayudarte a analizar un lote, redactar retroalimentación para aprendices o resumir observaciones técnicas con claridad."
             />
           )}
-          {activeTab === 'proyectos' && <InstructorProjectsTab />}
+          {activeTab === 'proyectos' && <InstructorProjectsTab session={session} />}
           {activeTab === 'perfil' && (
             <InstructorProfileTab
               autoFeedbackEnabled={autoFeedbackEnabled}

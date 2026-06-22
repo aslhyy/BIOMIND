@@ -9,6 +9,7 @@ export type AuthenticatedSession = {
   photoUrl?: string | null;
   identificacion?: string;
   programa?: string | null;
+  fichaId?: string | null;
   ficha?: string | null;
   fichasAsignadas?: string[];
   instructorUid?: string | null;
