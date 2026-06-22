@@ -1,27 +1,42 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userProfile() {
+      return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data;
+    }
+
     function isAdmin() {
-      return request.auth != null
+      return signedIn()
         && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
-        && get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol in ['Administrador', 'admin'];
+        && userProfile().rol in ['Administrador', 'admin'];
+    }
+
+    function isReviewer() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+        && userProfile().rol in ['Instructor', 'instructor', 'Pasante', 'pasante', 'Administrador', 'admin'];
     }
 
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return signedIn() && request.auth.uid == userId;
     }
 
     // Reglas abiertas temporalmente para pruebas integrales de Fase 10.
     // Permiten validar CRUD, asignaciones y trimestres con cualquier usuario autenticado.
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if signedIn();
     }
 
     match /usuarios/{userId} {
       allow list: if isAdmin()
-        || (request.auth != null && request.query.limit <= 1);
+        || (signedIn() && request.query.limit <= 1);
 
-      allow create: if request.auth != null
+      allow create: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.uid == userId
         && request.resource.data.correo == request.auth.token.email;
@@ -36,31 +51,88 @@ service cloud.firestore {
     }
 
     match /identificacionesRegistro/{identificacionId} {
-      allow read: if request.auth != null;
+      allow read: if signedIn();
 
-      allow create: if request.auth != null
+      allow create: if signedIn()
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.identificacion == identificacionId;
 
-      allow delete: if request.auth != null
+      allow delete: if signedIn()
         && resource.data.uid == request.auth.uid;
 
       allow update: if false;
     }
 
+    match /bitacoras/{bitacoraId} {
+      allow create: if signedIn()
+        && request.resource.data.aprendizUid == request.auth.uid
+        && request.resource.data.estado in ['Borrador', 'Enviada'];
+
+      allow read: if signedIn();
+
+      allow update: if (
+          resource.data.aprendizUid == request.auth.uid
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'estado',
+            'observacion',
+            'revisadoPorUid',
+            'revisadoPorNombre'
+          ])
+        )
+        || (
+          isReviewer()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'estado',
+            'observacion',
+            'revisadoPorUid',
+            'revisadoPorNombre',
+            'actualizadoEn'
+          ])
+          && request.resource.data.estado in ['Aprobada', 'Rechazada', 'Correccion']
+        );
+
+      allow delete: if signedIn()
+        && resource.data.aprendizUid == request.auth.uid;
+    }
+
     match /programas/{programaId} {
-      allow read: if request.auth != null;
-      allow create, update: if isAdmin();
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
     }
 
     match /fichas/{fichaId} {
-      allow read: if request.auth != null;
-      allow create, update: if isAdmin();
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
     }
 
     match /trimestres/{trimestreId} {
-      allow read: if request.auth != null;
-      allow create, update: if isAdmin();
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /competencias/{competenciaId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /resultadosAprendizaje/{resultadoId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /asignacionesCompetencias/{asignacionId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /proyectos/{proyectoId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin() || isReviewer();
+    }
+
+    match /gruposTrabajo/{grupoId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin() || isReviewer();
     }
   }
 }

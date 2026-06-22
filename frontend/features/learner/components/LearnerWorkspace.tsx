@@ -15,13 +15,15 @@ import { LearnerHistoryTab } from './LearnerHistoryTab';
 import { LearnerHomeTab } from './LearnerHomeTab';
 import { LearnerProfileTab } from './LearnerProfileTab';
 import { LearnerProjectsTab } from './LearnerProjectsTab';
+import { LearnerBitacorasTab } from './LearnerBitacorasTab';
 
-type LearnerTab = 'inicio' | 'historial' | 'asistente' | 'proyectos' | 'perfil';
+type LearnerTab = 'inicio' | 'historial' | 'asistente' | 'proyectos' | 'bitacoras' | 'perfil';
 
 const tabs: BottomBarTab[] = [
   { id: 'inicio', icon: 'home-variant-outline' },
   { id: 'historial', icon: 'notebook-edit-outline' },
   { id: 'proyectos', icon: 'briefcase-outline' },
+  { id: 'bitacoras', icon: 'notebook-edit-outline' },
   { id: 'perfil', icon: 'account-circle-outline' },
 ];
 
@@ -127,6 +129,9 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
             </>
           )}
           {activeTab === 'historial' && <LearnerHistoryTab />}
+          {activeTab === 'bitacoras' && (
+            <LearnerBitacorasTab session={session} />
+          )}
           {activeTab === 'asistente' && (
             <GeminiAssistantModule
               assistantQuestionsEnabledDefault
