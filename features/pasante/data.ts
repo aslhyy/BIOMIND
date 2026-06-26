@@ -37,6 +37,17 @@ export type PasanteTask = {
   status: 'Pendiente' | 'En revisión' | 'Completada';
 };
 
+export type PasanteAssignedLearner = {
+  id: string;
+  name: string;
+  ficha: string;
+  projectId: string;
+  project: string;
+  progress: number;
+  pendingQuestions: number;
+  lastObservation: string;
+};
+
 export const pasanteMetrics: PasanteMetric[] = [
   {
     id: 'projects',
@@ -133,5 +144,38 @@ export const pasanteTasks: PasanteTask[] = [
     projectId: 'arandanos',
     due: 'Viernes',
     status: 'Completada',
+  },
+];
+
+export const pasanteAssignedLearners: PasanteAssignedLearner[] = [
+  {
+    id: 'apr-pas-1',
+    name: 'Nicolas Rodriguez',
+    ficha: '2693201',
+    projectId: 'orquideas',
+    project: 'Orquídeas',
+    progress: 72,
+    pendingQuestions: 1,
+    lastObservation: 'Registro de humedad pendiente de validar.',
+  },
+  {
+    id: 'apr-pas-2',
+    name: 'Sarah Martinez',
+    ficha: '2693202',
+    projectId: 'fresas',
+    project: 'Fresas',
+    progress: 58,
+    pendingQuestions: 2,
+    lastObservation: 'Aislar frascos con borde amarillento.',
+  },
+  {
+    id: 'apr-pas-3',
+    name: 'Mafe Pineda',
+    ficha: '2693203',
+    projectId: 'arandanos',
+    project: 'Arándanos',
+    progress: 81,
+    pendingQuestions: 0,
+    lastObservation: 'Bitácora semanal documentada.',
   },
 ];

@@ -12,7 +12,16 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { pasanteMetrics, pasanteProjects, pasanteTasks, type PasanteMetric, type PasanteProject, type PasanteTask } from '../data';
+import {
+  pasanteAssignedLearners,
+  pasanteMetrics,
+  pasanteProjects,
+  pasanteTasks,
+  type PasanteAssignedLearner,
+  type PasanteMetric,
+  type PasanteProject,
+  type PasanteTask,
+} from '../data';
 import { pasantePalette } from '../theme';
 
 type PasanteTab = 'inicio' | 'seguimiento' | 'asistente' | 'proyectos' | 'perfil';
@@ -148,6 +157,9 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
   const assignedTasks = assignedProjects.length
     ? pasanteTasks.filter((task) => assignedProjects.some((project) => project.id === task.projectId))
     : [];
+  const assignedLearners = pasanteAssignedLearners.filter((learner) =>
+    assignedProjects.some((project) => project.id === learner.projectId)
+  );
 
   const [fontsLoaded] = useFonts({
     PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
@@ -174,7 +186,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
             <Text style={styles.blockTitle}>Acceso restringido</Text>
             <Text style={styles.blockText}>
               { !hasInstructor
-                ? 'Aún no tienes un instructor asignado. Contacta al administrador para completar la asignación.'
+                ? 'Aún no tienes un instructor asignado.'
                 : 'No tienes fichas asignadas. Pide al instructor que te asigne fichas para acceder a la aplicación.'
               }
             </Text>
@@ -207,6 +219,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
           )}
           {activeTab === 'seguimiento' && (
             <PasanteTrackingTab
+              learners={assignedLearners}
               projects={assignedProjects}
               tasks={assignedTasks}
               onOpenAssistant={openAssistantForProject}
@@ -216,6 +229,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
             <GeminiAssistantModule
               assistantQuestionsEnabledDefault
               composerPlaceholder="Escribe tus notas de práctica, dudas técnicas o hallazgos para convertirlos en evidencia..."
+              chatChannel="pasante"
               emptyStateLabel="Apoyo técnico del pasante"
               preferredProjectId={assistantProjectId}
               projects={assignedProjects.map((project) => ({
@@ -385,10 +399,12 @@ function PasanteHomeTab({
 }
 
 function PasanteTrackingTab({
+  learners,
   projects,
   tasks,
   onOpenAssistant,
 }: {
+  learners: PasanteAssignedLearner[];
   projects: PasanteProject[];
   tasks: PasanteTask[];
   onOpenAssistant: (projectId: string) => void;
@@ -400,6 +416,21 @@ function PasanteTrackingTab({
         text="Revisa tareas asignadas, prepara evidencias y deja cada observación lista para validación."
         title="Validaciones, tareas y práctica."
       />
+
+      <SectionHeading
+        actionLabel={`${learners.length} activos`}
+        subtitle="Aprendices y fichas que el pasante puede consultar y acompañar."
+        title="Aprendices asignados"
+      />
+      <View style={styles.stack}>
+        {learners.length ? (
+          learners.map((learner) => (
+            <AssignedLearnerCard key={learner.id} learner={learner} onOpenAssistant={onOpenAssistant} />
+          ))
+        ) : (
+          <EmptyAssignedState />
+        )}
+      </View>
 
       <SectionHeading
         actionLabel="Tareas"
@@ -694,6 +725,38 @@ function TaskCard({
   );
 }
 
+function AssignedLearnerCard({
+  learner,
+  onOpenAssistant,
+}: {
+  learner: PasanteAssignedLearner;
+  onOpenAssistant: (projectId: string) => void;
+}) {
+  return (
+    <View style={styles.learnerCard}>
+      <View style={styles.cardHeader}>
+        <View style={[styles.taskIcon, { backgroundColor: pasantePalette.softGreen }]}>
+          <MaterialCommunityIcons name="account-school-outline" size={18} color={pasantePalette.green} />
+        </View>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardTitle}>{learner.name}</Text>
+          <Text style={styles.cardMeta}>Ficha {learner.ficha} - {learner.project}</Text>
+        </View>
+        <Text style={styles.percent}>{learner.progress}%</Text>
+      </View>
+      <ProgressBar accent={pasantePalette.green} progress={learner.progress} soft={pasantePalette.softGreen} />
+      <View style={styles.badgeRow}>
+        <StatusBadge accent={pasantePalette.primary} label={`${learner.pendingQuestions} preguntas`} soft={pasantePalette.aquaSoft} />
+        <StatusBadge accent={pasantePalette.secondary} label="Observación lista" soft="#FFF1EB" />
+      </View>
+      <Text style={styles.cardText}>{learner.lastObservation}</Text>
+      <Pressable onPress={() => onOpenAssistant(learner.projectId)} style={styles.secondaryButton}>
+        <Text style={styles.secondaryButtonText}>Responder o reportar</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function QuestionCard({ thread }: { thread: (typeof demoPasanteQuestions)[number] }) {
   const accent = thread.status === 'Respondida' ? pasantePalette.green : pasantePalette.secondary;
 
@@ -713,6 +776,10 @@ function QuestionCard({ thread }: { thread: (typeof demoPasanteQuestions)[number
       <Text style={styles.cardText}>{thread.question}</Text>
       <Text style={styles.qaLabel}>Respuesta</Text>
       <Text style={styles.cardText}>{thread.answer}</Text>
+      <View style={styles.badgeRow}>
+        <StatusBadge accent={pasantePalette.primary} label="Responder pregunta" soft={pasantePalette.aquaSoft} />
+        <StatusBadge accent={pasantePalette.secondary} label="Escalar al instructor" soft="#FFF1EB" />
+      </View>
     </View>
   );
 }
@@ -1053,6 +1120,19 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 3,
     gap: 12,
+  },
+  learnerCard: {
+    backgroundColor: pasantePalette.surface,
+    borderColor: pasantePalette.border,
+    borderRadius: 22,
+    borderWidth: 1,
+    elevation: 3,
+    gap: 10,
+    padding: 16,
+    shadowColor: pasantePalette.shadow,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
   },
   taskCard: {
     backgroundColor: pasantePalette.surface,

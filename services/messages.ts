@@ -1,6 +1,10 @@
+import type {
+    AuthenticatedSession,
+    WorkspaceChatChannel,
+    WorkspaceChatMessage,
+} from '@/features/workspace/types';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
-import type { AuthenticatedSession, WorkspaceChatMessage } from '@/features/workspace/types';
 
 const MENSAJES_COLLECTION = 'mensajes';
 
@@ -11,26 +15,40 @@ function normalizeSegment(value: string) {
 export function buildProjectChatId({
   projectId,
   session,
+  chatChannel,
 }: {
   projectId: string;
   session: AuthenticatedSession;
+  chatChannel?: WorkspaceChatChannel;
 }) {
-  const roleSegment = normalizeSegment(session.role || 'usuario');
   const projectSegment = normalizeSegment(projectId || 'general');
-  return `${session.uid}-${roleSegment}-${projectSegment}`;
+  const channelSegment = normalizeSegment(String(chatChannel || ''));
+
+  if (channelSegment && channelSegment !== 'ai') {
+    return `${channelSegment}-${projectSegment}`;
+  }
+
+  const roleSegment = normalizeSegment(session.role || 'usuario');
+  return `${normalizeSegment(session.uid)}-${roleSegment}-${projectSegment}`;
 }
 
 export function subscribeToProjectMessages(
   {
     projectId,
     session,
+    chatChannel,
   }: {
     projectId: string;
     session: AuthenticatedSession;
+    chatChannel?: WorkspaceChatChannel;
   },
   onChange: (payload: { assistantQuestionsEnabled?: boolean; messages: WorkspaceChatMessage[] } | null) => void
 ) {
-  const chatRef = doc(db, MENSAJES_COLLECTION, buildProjectChatId({ projectId, session }));
+  const chatRef = doc(
+    db,
+    MENSAJES_COLLECTION,
+    buildProjectChatId({ projectId, session, chatChannel })
+  );
 
   return onSnapshot(
     chatRef,
@@ -56,14 +74,16 @@ export async function saveProjectMessages({
   projectId,
   projectTitle,
   session,
+  chatChannel,
 }: {
   assistantQuestionsEnabled: boolean;
   messages: WorkspaceChatMessage[];
   projectId: string;
   projectTitle: string;
   session: AuthenticatedSession;
+  chatChannel?: WorkspaceChatChannel;
 }) {
-  const chatId = buildProjectChatId({ projectId, session });
+  const chatId = buildProjectChatId({ projectId, session, chatChannel });
   const chatRef = doc(db, MENSAJES_COLLECTION, chatId);
   const lastMessage = messages[messages.length - 1];
 
@@ -71,6 +91,7 @@ export async function saveProjectMessages({
     chatRef,
     {
       chatId,
+      channel: chatChannel || 'ai',
       ownerUid: session.uid,
       ownerName: session.name,
       ownerRole: session.role,
