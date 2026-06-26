@@ -2,6 +2,7 @@ import { ProgressBar, StatusBadge } from '@/features/instructor/components/Instr
 import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
 import { RealAcademicContext, useAssignedSheetLabels } from '@/features/workspace/components/RealAcademicContext';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
+import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { WorkspaceBottomBar, type BottomBarTab } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
@@ -21,7 +22,7 @@ type PasanteTab = 'inicio' | 'seguimiento' | 'asistente' | 'proyectos' | 'perfil
 const tabs: BottomBarTab[] = [
   { id: 'inicio', icon: 'home-variant-outline' },
   { id: 'seguimiento', icon: 'clipboard-check-outline' },
-  { id: 'proyectos', icon: 'flask-outline' },
+  { id: 'proyectos', icon: 'message-text-outline' },
   { id: 'perfil', icon: 'account-circle-outline' },
 ];
 
@@ -242,7 +243,19 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
             />
           )}
           {activeTab === 'proyectos' && (
-            <PasanteProjectsTab projects={assignedProjects} onOpenAssistant={openAssistantForProject} />
+            <ProjectConversations
+              session={session}
+              tone={{
+                accent: pasantePalette.primary,
+                background: pasantePalette.background,
+                border: pasantePalette.border,
+                incoming: pasantePalette.surface,
+                muted: pasantePalette.textMuted,
+                outgoing: pasantePalette.aquaSoft,
+                surface: pasantePalette.surface,
+                text: pasantePalette.text,
+              }}
+            />
           )}
           {activeTab === 'perfil' && (
             <PasanteProfileTab

@@ -98,7 +98,7 @@ export function LearnerHistoryTab() {
   return (
     <>
       <LearnerSectionIntro
-        label="Bitácora y evidencias"
+        label="Bitácoras y evidencias"
         text="Escribe avances manuales, adjunta referencias de imagen y revisa las observaciones que deja el instructor."
         title="Registros, avances y observaciones."
       />

@@ -1,10 +1,10 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { assistantPrompts, learnerRoster, projectSnapshots } from '../data';
+import { assistantPrompts, projectSnapshots } from '../data';
 import { instructorPalette } from '../theme';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
@@ -12,16 +12,16 @@ import { RealAcademicContext } from '@/features/workspace/components/RealAcademi
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import { InstructorHomeTab } from './InstructorHomeTab';
-import { InstructorLearnersTab, type LearnerFilter } from './InstructorLearnersTab';
 import { InstructorProfileTab } from './InstructorProfileTab';
 import { InstructorProjectsTab } from './InstructorProjectsTab';
+import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
 
 type InstructorTab = 'inicio' | 'aprendices' | 'asistente' | 'proyectos' | 'perfil';
 
 const tabs: BottomBarTab[] = [
   { id: 'inicio', icon: 'home-variant-outline' },
-  { id: 'aprendices', icon: 'account-group-outline' },
-  { id: 'proyectos', icon: 'clipboard-text-outline' },
+  { id: 'aprendices', icon: 'school-outline' },
+  { id: 'proyectos', icon: 'message-text-outline' },
   { id: 'perfil', icon: 'account-circle-outline' },
 ];
 
@@ -33,7 +33,6 @@ type InstructorWorkspaceProps = {
 export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceProps) {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<InstructorTab>('inicio');
-  const [activeFilter, setActiveFilter] = useState<LearnerFilter>('Todos');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [autoFeedbackEnabled, setAutoFeedbackEnabled] = useState(true);
   const [offlineEnabled, setOfflineEnabled] = useState(true);
@@ -45,14 +44,6 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
     PoppinsSemiBold: require('../../../assets/fonts/Poppins/Poppins-SemiBold.ttf'),
     SulphurPointBold: require('../../../assets/fonts/SulphurPoint-Bold.ttf'),
   });
-
-  const roster = useMemo(() => {
-    if (activeFilter === 'Todos') {
-      return learnerRoster;
-    }
-
-    return learnerRoster.filter((learner) => learner.status === activeFilter);
-  }, [activeFilter]);
 
   if (!fontsLoaded) {
     return null;
@@ -74,7 +65,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
             </>
           )}
           {activeTab === 'aprendices' && (
-            <InstructorLearnersTab activeFilter={activeFilter} onFilterChange={setActiveFilter} roster={roster} />
+            <InstructorProjectsTab session={session} />
           )}
           {activeTab === 'asistente' && (
             <GeminiAssistantModule
@@ -94,7 +85,21 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
               welcomeMessage="Hola. Soy tu asistente de Biomind con Gemini. Puedo ayudarte a analizar un lote, redactar retroalimentación para aprendices o resumir observaciones técnicas con claridad."
             />
           )}
-          {activeTab === 'proyectos' && <InstructorProjectsTab session={session} />}
+          {activeTab === 'proyectos' && (
+            <ProjectConversations
+              session={session}
+              tone={{
+                accent: instructorPalette.primary,
+                background: instructorPalette.background,
+                border: instructorPalette.border,
+                incoming: instructorPalette.surface,
+                muted: instructorPalette.textMuted,
+                outgoing: instructorPalette.mint,
+                surface: instructorPalette.surface,
+                text: instructorPalette.text,
+              }}
+            />
+          )}
           {activeTab === 'perfil' && (
             <InstructorProfileTab
               autoFeedbackEnabled={autoFeedbackEnabled}

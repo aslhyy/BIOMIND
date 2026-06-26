@@ -14,6 +14,9 @@ import {
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import { instructorPalette } from '../theme';
 import { IconLabel, ProgressBar, SectionHeading, StatusBadge } from './InstructorUI';
+import { BitacorasReviewPanel } from '@/features/workspace/components/BitacorasReviewPanel';
+// @ts-ignore
+import { escucharBitacoras } from '@/services/bitacoras';
 
 type AcademicSheet = {
   id: string;
@@ -72,6 +75,32 @@ type AcademicProject = {
   progreso?: number;
 };
 
+type AcademicBitacora = {
+  id: string;
+  aprendizUid?: string;
+  aprendizNombre?: string;
+  proyectoId?: string;
+  proyectoTitulo?: string;
+  fichaId?: string;
+  descripcion?: string;
+  fecha?: string;
+  avance?: string;
+  dificultades?: string;
+  evidencias?: {
+    nombre?: string;
+    mimeType?: string;
+    base64?: string;
+    url?: string;
+  }[];
+  archivoNombre?: string;
+  archivoUrl?: string;
+  estado?: string;
+  observacion?: string;
+  revisadoPorUid?: string;
+  revisadoPorNombre?: string;
+  revisadoPorRol?: string;
+};
+
 type ProjectState = 'Pendiente' | 'En proceso' | 'Aprobado' | 'Desaprobado';
 
 type ProjectForm = {
@@ -127,10 +156,12 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
   const [raps, setRaps] = useState<AcademicRap[]>([]);
   const [projects, setProjects] = useState<AcademicProject[]>([]);
   const [groups, setGroups] = useState<WorkGroup[]>([]);
+  const [bitacoras, setBitacoras] = useState<AcademicBitacora[]>([]);
   const [projectForm, setProjectForm] = useState<ProjectForm>(emptyProjectForm);
   const [groupForm, setGroupForm] = useState<GroupForm>(emptyGroupForm);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [selectedListSheetId, setSelectedListSheetId] = useState('');
+  const [selectedLearnerId, setSelectedLearnerId] = useState('');
   const [projectFormOpen, setProjectFormOpen] = useState(false);
   const [groupFormOpen, setGroupFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -156,11 +187,16 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
       (items: WorkGroup[]) => setGroups(items.filter((group) => group.instructorUid === session.uid && group.estado !== 'Inactivo')),
       (groupsError: any) => setError(groupsError?.message || 'No pudimos cargar grupos.')
     );
+    const unsubscribeBitacoras = escucharBitacoras(
+      setBitacoras,
+      (bitacorasError: any) => setError(bitacorasError?.message || 'No pudimos cargar las bitácoras.')
+    );
 
     return () => {
       unsubscribeContext?.();
       unsubscribeProjects?.();
       unsubscribeGroups?.();
+      unsubscribeBitacoras?.();
     };
   }, [session]);
 
@@ -225,6 +261,49 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
     () => groups.filter((group) => group.fichaId === selectedListSheetId),
     [groups, selectedListSheetId]
   );
+  const selectedTrackingProject = useMemo(
+    () => filteredProjects.find((project) => project.id === selectedProjectId) || filteredProjects[0],
+    [filteredProjects, selectedProjectId]
+  );
+  const selectedProjectGroup = useMemo(
+    () => groups.find((group) => group.id === selectedTrackingProject?.grupoId),
+    [groups, selectedTrackingProject?.grupoId]
+  );
+  const learnerIdsForSelectedProject = useMemo(() => {
+    if (!selectedTrackingProject) {
+      return new Set<string>();
+    }
+
+    return new Set(
+      selectedTrackingProject.asignacionTipo === 'grupo'
+        ? selectedProjectGroup?.aprendizIds || []
+        : selectedTrackingProject.aprendizIds || []
+    );
+  }, [selectedProjectGroup?.aprendizIds, selectedTrackingProject]);
+  const trackingLearners = useMemo(
+    () => learners.filter((learner) => learnerIdsForSelectedProject.has(learner.id)),
+    [learnerIdsForSelectedProject, learners]
+  );
+  const allProjectBitacoras = useMemo(
+    () => bitacoras.filter((bitacora) => bitacora.proyectoId === selectedTrackingProject?.id),
+    [bitacoras, selectedTrackingProject?.id]
+  );
+  const projectBitacoras = useMemo(
+    () => allProjectBitacoras.filter((bitacora) =>
+      !selectedLearnerId || bitacora.aprendizUid === selectedLearnerId
+    ),
+    [allProjectBitacoras, selectedLearnerId]
+  );
+  const reviewedCount = allProjectBitacoras.filter((bitacora) =>
+    ['Aprobada', 'Rechazada', 'Correccion'].includes(bitacora.estado || '')
+  ).length;
+  const approvedCount = allProjectBitacoras.filter((bitacora) => bitacora.estado === 'Aprobada').length;
+  const reviewProgress = allProjectBitacoras.length
+    ? Math.round((reviewedCount / allProjectBitacoras.length) * 100)
+    : 0;
+  const approvalProgress = allProjectBitacoras.length
+    ? Math.round((approvedCount / allProjectBitacoras.length) * 100)
+    : 0;
 
   useEffect(() => {
     setProjectForm((current) => {
@@ -238,6 +317,13 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
       return { ...current, rapId: nextRapId };
     });
   }, [projectForm.competenciaId, rapsForCompetence]);
+
+  useEffect(() => {
+    if (!filteredProjects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(filteredProjects[0]?.id || '');
+    }
+    setSelectedLearnerId('');
+  }, [filteredProjects, selectedListSheetId, selectedProjectId]);
 
   const runAction = async (action: () => Promise<void>, successMessage: string) => {
     setSaving(true);
@@ -353,11 +439,10 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
   return (
     <>
       <View style={styles.heroCard}>
-        <Text style={styles.heroLabel}>Gestión de Proyectos y Evidencias</Text>
-        <Text style={styles.heroTitle}>Proyectos de Formación</Text>
+        <Text style={styles.heroLabel}>GESTIÓN ACADÉMICA</Text>
+        <Text style={styles.heroTitle}>Proyectos, grupos y seguimiento.</Text>
         <Text style={styles.heroText}>
-          Crea proyectos por ficha, competencia y RAP; asigna aprendices o grupos y controla si estan pendientes,
-          en proceso, aprobados o desaprobados.
+          Administra proyectos y grupos, consulta avances y revisa las bitácoras de cada aprendiz por ficha y proyecto.
         </Text>
       </View>
 
@@ -552,6 +637,69 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
         )) : <EmptyCard text="Aún no hay grupos creados para esta ficha." />}
       </View>
 
+      <SectionHeading
+        actionLabel={selectedTrackingProject ? selectedTrackingProject.estado || 'Pendiente' : 'Sin proyecto'}
+        subtitle="Selecciona un proyecto para consultar sus aprendices, avances y bitácoras."
+        title="Seguimiento del proyecto"
+      />
+
+      <ProjectTrackingSelector
+        projects={filteredProjects}
+        selectedProjectId={selectedTrackingProject?.id || ''}
+        onSelect={(projectId) => {
+          setSelectedProjectId(projectId);
+          setSelectedLearnerId('');
+        }}
+      />
+
+      {selectedTrackingProject ? (
+        <>
+          <View style={styles.progressDashboard}>
+            <ProgressMetric
+              icon="chart-line"
+              label="Avance del proyecto"
+              progress={Number(selectedTrackingProject.progreso || 0)}
+              value={`${Number(selectedTrackingProject.progreso || 0)}%`}
+            />
+            <ProgressMetric
+              icon="clipboard-check-outline"
+              label="Bitácoras revisadas"
+              progress={reviewProgress}
+              value={`${reviewedCount}/${allProjectBitacoras.length}`}
+            />
+            <ProgressMetric
+              icon="check-decagram-outline"
+              label="Bitácoras aprobadas"
+              progress={approvalProgress}
+              value={`${approvalProgress}%`}
+            />
+          </View>
+
+          <SectionHeading
+            actionLabel={`${trackingLearners.length} aprendices`}
+            subtitle="Filtra las bitácoras del proyecto por aprendiz."
+            title="Aprendices asignados"
+          />
+
+          <LearnerTrackingFilter
+            learners={trackingLearners}
+            selectedLearnerId={selectedLearnerId}
+            bitacoras={allProjectBitacoras}
+            onSelect={setSelectedLearnerId}
+          />
+
+          <SectionHeading
+            actionLabel={`${projectBitacoras.length} registros`}
+            subtitle="Selecciona una bitácora para abrir toda la información y revisar la entrega."
+            title="Bitácoras del proyecto"
+          />
+
+          <BitacorasReviewPanel bitacoras={projectBitacoras} session={session} />
+        </>
+      ) : (
+        <EmptyCard text="Selecciona una ficha que tenga proyectos para consultar su seguimiento." />
+      )}
+
       {saving ? (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator color={instructorPalette.primary} />
@@ -559,6 +707,138 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
         </View>
       ) : null}
     </>
+  );
+}
+
+function ProjectTrackingSelector({
+  onSelect,
+  projects,
+  selectedProjectId,
+}: {
+  onSelect: (projectId: string) => void;
+  projects: AcademicProject[];
+  selectedProjectId: string;
+}) {
+  const [query, setQuery] = useState('');
+  const filtered = projects.filter((project) =>
+    `${project.titulo || ''} ${project.competenciaNombre || ''}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase())
+  );
+
+  return (
+    <View style={styles.trackingSelectorCard}>
+      <View style={styles.trackingSearch}>
+        <MaterialCommunityIcons name="magnify" size={19} color={instructorPalette.textMuted} />
+        <TextInput
+          placeholder="Buscar proyecto..."
+          placeholderTextColor={instructorPalette.textMuted}
+          value={query}
+          onChangeText={setQuery}
+          style={styles.trackingSearchInput}
+        />
+      </View>
+      <View style={styles.trackingOptions}>
+        {filtered.map((project) => (
+          <Pressable
+            key={project.id}
+            onPress={() => onSelect(project.id)}
+            style={[
+              styles.trackingProjectButton,
+              project.id === selectedProjectId && styles.trackingProjectButtonActive,
+            ]}>
+            <Text
+              style={[
+                styles.trackingProjectText,
+                project.id === selectedProjectId && styles.trackingProjectTextActive,
+              ]}>
+              {project.titulo || 'Proyecto sin nombre'}
+            </Text>
+            <Text
+              style={[
+                styles.trackingProjectMeta,
+                project.id === selectedProjectId && styles.trackingProjectTextActive,
+              ]}>
+              {project.competenciaNombre || 'Sin competencia'}
+            </Text>
+          </Pressable>
+        ))}
+        {!filtered.length ? <Text style={styles.emptyText}>No hay proyectos para esta ficha.</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function ProgressMetric({
+  icon,
+  label,
+  progress,
+  value,
+}: {
+  icon: 'chart-line' | 'clipboard-check-outline' | 'check-decagram-outline';
+  label: string;
+  progress: number;
+  value: string;
+}) {
+  const normalizedProgress = Math.max(0, Math.min(100, progress));
+
+  return (
+    <View style={styles.progressMetric}>
+      <View style={styles.progressMetricHeader}>
+        <View style={styles.progressMetricIcon}>
+          <MaterialCommunityIcons name={icon} size={18} color={instructorPalette.primary} />
+        </View>
+        <Text style={styles.progressMetricValue}>{value}</Text>
+      </View>
+      <Text style={styles.progressMetricLabel}>{label}</Text>
+      <ProgressBar
+        accent={instructorPalette.primary}
+        progress={normalizedProgress}
+        soft={instructorPalette.mint}
+      />
+    </View>
+  );
+}
+
+function LearnerTrackingFilter({
+  bitacoras,
+  learners,
+  onSelect,
+  selectedLearnerId,
+}: {
+  bitacoras: AcademicBitacora[];
+  learners: AcademicUser[];
+  onSelect: (learnerId: string) => void;
+  selectedLearnerId: string;
+}) {
+  return (
+    <View style={styles.learnerFilterWrap}>
+      <Pressable
+        onPress={() => onSelect('')}
+        style={[styles.learnerFilter, !selectedLearnerId && styles.learnerFilterActive]}>
+        <Text style={[styles.learnerFilterText, !selectedLearnerId && styles.learnerFilterTextActive]}>
+          Todos
+        </Text>
+        <Text style={[styles.learnerFilterCount, !selectedLearnerId && styles.learnerFilterTextActive]}>
+          {bitacoras.length}
+        </Text>
+      </Pressable>
+      {learners.map((learner) => {
+        const active = selectedLearnerId === learner.id;
+        const count = bitacoras.filter((bitacora) => bitacora.aprendizUid === learner.id).length;
+        return (
+          <Pressable
+            key={learner.id}
+            onPress={() => onSelect(learner.id)}
+            style={[styles.learnerFilter, active && styles.learnerFilterActive]}>
+            <Text numberOfLines={1} style={[styles.learnerFilterText, active && styles.learnerFilterTextActive]}>
+              {learner.nombre || learner.correo || 'Aprendiz'}
+            </Text>
+            <Text style={[styles.learnerFilterCount, active && styles.learnerFilterTextActive]}>{count}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -1465,5 +1745,124 @@ const styles = StyleSheet.create({
     color: instructorPalette.primary,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
+  },
+  trackingSelectorCard: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 22,
+    gap: 12,
+    padding: 14,
+  },
+  trackingSearch: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.surfaceMuted,
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 13,
+  },
+  trackingSearchInput: {
+    color: instructorPalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    minHeight: 44,
+  },
+  trackingOptions: {
+    gap: 8,
+  },
+  trackingProjectButton: {
+    backgroundColor: instructorPalette.surfaceMuted,
+    borderColor: 'transparent',
+    borderRadius: 15,
+    borderWidth: 1,
+    gap: 2,
+    padding: 12,
+  },
+  trackingProjectButtonActive: {
+    backgroundColor: instructorPalette.mint,
+    borderColor: instructorPalette.primary,
+  },
+  trackingProjectText: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  trackingProjectMeta: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+  },
+  trackingProjectTextActive: {
+    color: instructorPalette.primary,
+  },
+  progressDashboard: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  progressMetric: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 20,
+    flexBasis: '31%',
+    flexGrow: 1,
+    gap: 9,
+    minWidth: 105,
+    padding: 13,
+  },
+  progressMetricHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  progressMetricIcon: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.mint,
+    borderRadius: 16,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  progressMetricValue: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 15,
+  },
+  progressMetricLabel: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  learnerFilterWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  learnerFilter: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 7,
+    maxWidth: '100%',
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+  },
+  learnerFilterActive: {
+    backgroundColor: instructorPalette.primary,
+  },
+  learnerFilterText: {
+    color: instructorPalette.text,
+    flexShrink: 1,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
+  },
+  learnerFilterTextActive: {
+    color: '#FFFFFF',
+  },
+  learnerFilterCount: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 10,
   },
 });

@@ -8,22 +8,19 @@ import { learnerAssistantQuestions, learnerProjects } from '../data';
 import { learnerPalette } from '@/features/learner/theme';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
-import { RealAcademicContext } from '@/features/workspace/components/RealAcademicContext';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
-import { LearnerHistoryTab } from './LearnerHistoryTab';
 import { LearnerHomeTab } from './LearnerHomeTab';
 import { LearnerProfileTab } from './LearnerProfileTab';
-import { LearnerProjectsTab } from './LearnerProjectsTab';
 import { LearnerBitacorasTab } from './LearnerBitacorasTab';
+import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
 
-type LearnerTab = 'inicio' | 'historial' | 'asistente' | 'proyectos' | 'bitacoras' | 'perfil';
+type LearnerTab = 'inicio' | 'historial' | 'asistente' | 'proyectos' | 'perfil';
 
 const tabs: BottomBarTab[] = [
   { id: 'inicio', icon: 'home-variant-outline' },
   { id: 'historial', icon: 'notebook-edit-outline' },
-  { id: 'proyectos', icon: 'briefcase-outline' },
-  { id: 'bitacoras', icon: 'notebook-edit-outline' },
+  { id: 'proyectos', icon: 'message-text-outline' },
   { id: 'perfil', icon: 'account-circle-outline' },
 ];
 
@@ -123,13 +120,9 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
           {activeTab === 'inicio' && (
-            <>
-              <LearnerHomeTab session={session} onOpenAssistant={openAssistantForProject} />
-              <RealAcademicContext session={session} />
-            </>
+            <LearnerHomeTab session={session} onOpenAssistant={openAssistantForProject} />
           )}
-          {activeTab === 'historial' && <LearnerHistoryTab />}
-          {activeTab === 'bitacoras' && (
+          {activeTab === 'historial' && (
             <LearnerBitacorasTab session={session} />
           )}
           {activeTab === 'asistente' && (
@@ -155,7 +148,20 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
             />
           )}
           {activeTab === 'proyectos' && (
-            <LearnerProjectsTab onOpenAssistant={openAssistantForProject} />
+            <ProjectConversations
+              legacyHeader
+              session={session}
+              tone={{
+                accent: learnerPalette.primary,
+                background: learnerPalette.background,
+                border: learnerPalette.border,
+                incoming: learnerPalette.surface,
+                muted: learnerPalette.textMuted,
+                outgoing: learnerPalette.mint,
+                surface: learnerPalette.surface,
+                text: learnerPalette.text,
+              }}
+            />
           )}
           {activeTab === 'perfil' && (
             <LearnerProfileTab

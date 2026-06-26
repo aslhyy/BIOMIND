@@ -76,7 +76,8 @@ service cloud.firestore {
             'estado',
             'observacion',
             'revisadoPorUid',
-            'revisadoPorNombre'
+            'revisadoPorNombre',
+            'revisadoPorRol'
           ])
         )
         || (
@@ -86,6 +87,7 @@ service cloud.firestore {
             'observacion',
             'revisadoPorUid',
             'revisadoPorNombre',
+            'revisadoPorRol',
             'actualizadoEn'
           ])
           && request.resource.data.estado in ['Aprobada', 'Rechazada', 'Correccion']
@@ -133,6 +135,16 @@ service cloud.firestore {
     match /gruposTrabajo/{grupoId} {
       allow read: if signedIn();
       allow create, update, delete: if isAdmin() || isReviewer();
+    }
+
+    match /conversacionesProyecto/{proyectoId} {
+      allow read, create, update: if signedIn();
+      allow delete: if isAdmin();
+
+      match /mensajes/{mensajeId} {
+        allow read, create: if signedIn();
+        allow update, delete: if false;
+      }
     }
   }
 }

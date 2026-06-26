@@ -9,8 +9,7 @@ import {
     updateDoc,
     where,
 } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { db, storage } from './firebase';
+import { db } from './firebase';
 
 const BITACORAS_COLLECTION = 'bitacoras';
 
@@ -29,25 +28,14 @@ function mapSnapshot(snapshot) {
     }));
 }
 
-async function subirEvidencia({ uri, nombre, mimeType, aprendizUid }) {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-
-    const safeName = nombre || `evidencia-${Date.now()}.jpg`;
-    const ruta = `bitacoras/${aprendizUid}/${Date.now()}-${safeName}`;
-    const storageRef = ref(storage, ruta);
-
-    await uploadBytes(storageRef, blob, {
-        contentType: mimeType || 'image/jpeg',
-    });
-
-    const url = await getDownloadURL(storageRef);
-
-    return {
-        url,
-        nombre: safeName,
-        ruta,
-    };
+export function escucharBitacoras(onData, onError) {
+    return onSnapshot(
+        collection(db, BITACORAS_COLLECTION),
+        (snapshot) => onData(
+            mapSnapshot(snapshot).sort((a, b) => cleanText(b.fecha).localeCompare(cleanText(a.fecha)))
+        ),
+        onError
+    );
 }
 
 export function escucharBitacorasAprendiz(aprendizUid, onData, onError) {
@@ -59,10 +47,11 @@ export function escucharBitacorasAprendiz(aprendizUid, onData, onError) {
     return onSnapshot(
         query(
             collection(db, BITACORAS_COLLECTION),
-            where('aprendizUid', '==', aprendizUid),
-            orderBy('fecha', 'desc')
+            where('aprendizUid', '==', aprendizUid)
         ),
-        (snapshot) => onData(mapSnapshot(snapshot)),
+        (snapshot) => onData(
+            mapSnapshot(snapshot).sort((a, b) => cleanText(b.fecha).localeCompare(cleanText(a.fecha)))
+        ),
         onError
     );
 }
@@ -101,7 +90,7 @@ export function escucharBitacorasPorProyecto(proyectoId, onData, onError) {
     );
 }
 
-export async function guardarBitacora(bitacora, evidenciasLocales = []) {
+export async function guardarBitacora(bitacora) {
     const descripcion = cleanText(bitacora.descripcion);
     const fecha = cleanText(bitacora.fecha);
     const avance = cleanText(bitacora.avance);
@@ -111,20 +100,21 @@ export async function guardarBitacora(bitacora, evidenciasLocales = []) {
         throw new Error('Completa descripción, fecha y avance realizado.');
     }
 
-    const evidenciasSubidas = [];
+    const evidencias = Array.isArray(bitacora.evidencias) ? bitacora.evidencias : [];
+    const totalEvidenceCharacters = evidencias.reduce(
+        (total, evidencia) => total + cleanText(evidencia.base64).length,
+        0
+    );
 
-    for (const evidencia of evidenciasLocales) {
-        const subida = await subirEvidencia({
-            uri: evidencia.uri,
-            nombre: evidencia.fileName || evidencia.nombre,
-            mimeType: evidencia.mimeType,
-            aprendizUid: bitacora.aprendizUid,
-        });
-
-        evidenciasSubidas.push(subida);
+    if (evidencias.length > 3) {
+        throw new Error('Puedes guardar máximo 3 fotografías por bitácora.');
     }
 
-    const payload = {
+    if (totalEvidenceCharacters > 700000) {
+        throw new Error('Las fotografías ocupan demasiado espacio. Elimina una o selecciona imágenes más livianas.');
+    }
+
+    const learnerPayload = {
         aprendizUid: bitacora.aprendizUid,
         aprendizNombre: bitacora.aprendizNombre,
         proyectoId: bitacora.proyectoId,
@@ -134,24 +124,24 @@ export async function guardarBitacora(bitacora, evidenciasLocales = []) {
         fecha,
         avance,
         dificultades,
-        evidencias: [
-            ...(Array.isArray(bitacora.evidencias) ? bitacora.evidencias : []),
-            ...evidenciasSubidas,
-        ],
-        estado: bitacora.estado || 'Enviada',
-        observacion: bitacora.observacion || '',
-        revisadoPorUid: bitacora.revisadoPorUid || null,
-        revisadoPorNombre: bitacora.revisadoPorNombre || null,
+        evidencias,
+        archivoNombre: cleanText(bitacora.archivoNombre),
+        archivoUrl: cleanText(bitacora.archivoUrl),
         actualizadoEn: now(),
     };
 
     if (bitacora.id) {
-        await updateDoc(doc(db, BITACORAS_COLLECTION, bitacora.id), payload);
+        await updateDoc(doc(db, BITACORAS_COLLECTION, bitacora.id), learnerPayload);
         return;
     }
 
     await addDoc(collection(db, BITACORAS_COLLECTION), {
-        ...payload,
+        ...learnerPayload,
+        estado: 'Enviada',
+        observacion: '',
+        revisadoPorUid: null,
+        revisadoPorNombre: null,
+        revisadoPorRol: null,
         creadoEn: now(),
     });
 }
@@ -177,6 +167,7 @@ export async function revisarBitacora(bitacoraId, revision) {
         observacion,
         revisadoPorUid: revision.revisadoPorUid,
         revisadoPorNombre: revision.revisadoPorNombre,
+        revisadoPorRol: revision.revisadoPorRol,
         actualizadoEn: now(),
     });
 }
