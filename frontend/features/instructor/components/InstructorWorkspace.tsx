@@ -1,3 +1,12 @@
+import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
+import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
+import { RealAcademicContext } from '@/features/workspace/components/RealAcademicContext';
+import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
+import type {
+  AuthenticatedSession,
+  WorkspaceChatChannel,
+} from '@/features/workspace/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -6,15 +15,9 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { assistantPrompts, projectSnapshots } from '../data';
 import { instructorPalette } from '../theme';
-import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
-import { UserAvatar } from '@/features/workspace/components/UserAvatar';
-import { RealAcademicContext } from '@/features/workspace/components/RealAcademicContext';
-import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
-import type { AuthenticatedSession } from '@/features/workspace/types';
 import { InstructorHomeTab } from './InstructorHomeTab';
 import { InstructorProfileTab } from './InstructorProfileTab';
 import { InstructorProjectsTab } from './InstructorProjectsTab';
-import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
 
 type InstructorTab = 'inicio' | 'aprendices' | 'asistente' | 'proyectos' | 'perfil';
 
@@ -37,6 +40,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
   const [autoFeedbackEnabled, setAutoFeedbackEnabled] = useState(true);
   const [offlineEnabled, setOfflineEnabled] = useState(true);
   const [dualAssistantEnabled, setDualAssistantEnabled] = useState(true);
+  const [assistantChatChannel, setAssistantChatChannel] = useState<WorkspaceChatChannel>('ai');
 
   const [fontsLoaded] = useFonts({
     PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
@@ -60,7 +64,13 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
 
           {activeTab === 'inicio' && (
             <>
-              <InstructorHomeTab session={session} />
+              <InstructorHomeTab
+                session={session}
+                onOpenChatChannel={(channel) => {
+                  setAssistantChatChannel(channel);
+                  setActiveTab('asistente');
+                }}
+              />
               <RealAcademicContext session={session} />
             </>
           )}
@@ -82,6 +92,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
               systemContext="Eres Biomind IA para instructores de biotecnología vegetal. Ayudas a revisar lotes, redactar retroalimentación, resumir observaciones, responder dudas y orientar decisiones de laboratorio."
               title="Asistente IA del laboratorio"
               voiceEnabled={voiceEnabled}
+              chatChannel={assistantChatChannel}
               welcomeMessage="Hola. Soy tu asistente de Biomind con Gemini. Puedo ayudarte a analizar un lote, redactar retroalimentación para aprendices o resumir observaciones técnicas con claridad."
             />
           )}

@@ -1,5 +1,5 @@
-import type { ComponentProps } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import type { ComponentProps } from 'react';
 
 export type AuthenticatedSession = {
   uid: string;
@@ -30,12 +30,23 @@ export type WorkspaceAssistantProject = {
   title: string;
 };
 
+export type WorkspaceChatChannel =
+  | 'ai'
+  | 'instructor'
+  | 'pasante'
+  | 'admin'
+  | 'administrador'
+  | 'general'
+  | string;
+
 export type WorkspaceChatRole = 'user' | 'model';
 
 export type WorkspaceChatMessage = {
   id: string;
   role: WorkspaceChatRole;
   text: string;
+  authorName?: string;
+  authorRole?: string;
   createdAt?: string;
   inputMode?: 'manual' | 'voice';
 };

@@ -1,5 +1,7 @@
+import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
+import type { AuthenticatedSession } from '@/features/workspace/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import {
   instructorAlerts,
   instructorMetrics,
@@ -13,10 +15,14 @@ import {
 } from '../data';
 import { instructorPalette } from '../theme';
 import { IconLabel, ProgressBar, SectionHeading, SectionTitle, StatusBadge } from './InstructorUI';
-import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
-import type { AuthenticatedSession } from '@/features/workspace/types';
 
-export function InstructorHomeTab({ session }: { session: AuthenticatedSession }) {
+export function InstructorHomeTab({
+  session,
+  onOpenChatChannel,
+}: {
+  session: AuthenticatedSession;
+  onOpenChatChannel: (channel: 'admin' | 'pasante') => void;
+}) {
   const validationItems = [
     {
       id: 'rap1',
@@ -41,6 +47,29 @@ export function InstructorHomeTab({ session }: { session: AuthenticatedSession }
       status: 'Aprobar',
       icon: 'briefcase-check-outline' as const,
       accent: instructorPalette.secondary,
+    },
+  ];
+  const rapSummary = [
+    { id: 'approved', label: 'RAP aprobados', value: 8, progress: 72, accent: instructorPalette.primary, soft: instructorPalette.mint },
+    { id: 'process', label: 'RAP en proceso', value: 5, progress: 45, accent: instructorPalette.secondary, soft: instructorPalette.softGreen },
+    { id: 'pending', label: 'RAP pendientes', value: 3, progress: 25, accent: '#EAA189', soft: instructorPalette.peachSurface },
+  ];
+  const communicationChannels = [
+    {
+      id: 'admin',
+      title: 'Administrador',
+      detail: 'Solicita ajustes de fichas, asignaciones, permisos o novedades institucionales.',
+      icon: 'shield-account-outline' as const,
+      accent: instructorPalette.primary,
+      status: 'Canal separado',
+    },
+    {
+      id: 'pasante',
+      title: 'Pasante',
+      detail: 'Coordina observaciones de laboratorio, preguntas escaladas y reportes de práctica.',
+      icon: 'account-tie-outline' as const,
+      accent: instructorPalette.secondary,
+      status: 'Canal separado',
     },
   ];
 
@@ -121,6 +150,18 @@ export function InstructorHomeTab({ session }: { session: AuthenticatedSession }
         subtitle="Aprobacion de proyectos, RAP, competencias y evidencias."
         title="Validaciones académicas"
       />
+      <View style={styles.rapGrid}>
+        {rapSummary.map((item) => (
+          <View key={item.id} style={[styles.rapCard, { backgroundColor: item.soft }]}>
+            <View style={styles.rapHeader}>
+              <Text style={[styles.rapValue, { color: item.accent }]}>{item.value}</Text>
+              <StatusBadge accent={item.accent} label={`${item.progress}%`} soft="#FFFFFFAA" />
+            </View>
+            <Text style={styles.rapLabel}>{item.label}</Text>
+            <ProgressBar accent={item.accent} progress={item.progress} soft="#FFFFFF" />
+          </View>
+        ))}
+      </View>
       <View style={styles.stack}>
         {validationItems.map((item) => (
           <View key={item.id} style={styles.validationRow}>
@@ -135,6 +176,32 @@ export function InstructorHomeTab({ session }: { session: AuthenticatedSession }
               <Text style={styles.alertText}>{item.detail}</Text>
             </View>
           </View>
+        ))}
+      </View>
+
+      <SectionHeading
+        actionLabel="Mensajes"
+        subtitle="Comunicación diferenciada para no mezclar gestión académica y acompañamiento técnico."
+        title="Canales del instructor"
+      />
+      <View style={styles.stack}>
+        {communicationChannels.map((channel) => (
+          <Pressable
+            key={channel.id}
+            onPress={() => onOpenChatChannel(channel.id as 'admin' | 'pasante')}
+            style={styles.channelCard}
+          >
+            <View style={[styles.channelIcon, { backgroundColor: `${channel.accent}22` }]}>
+              <MaterialCommunityIcons name={channel.icon} size={19} color={channel.accent} />
+            </View>
+            <View style={styles.alertCopy}>
+              <View style={styles.alertHeader}>
+                <Text style={styles.alertTitle}>Hablar con {channel.title}</Text>
+                <StatusBadge accent={channel.accent} label={channel.status} soft={`${channel.accent}1F`} />
+              </View>
+              <Text style={styles.alertText}>{channel.detail}</Text>
+            </View>
+          </Pressable>
         ))}
       </View>
 
@@ -348,6 +415,35 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 12,
   },
+  rapGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  rapCard: {
+    borderRadius: 22,
+    flexBasis: '31%',
+    flexGrow: 1,
+    gap: 9,
+    minWidth: 106,
+    padding: 14,
+  },
+  rapHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  rapValue: {
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 22,
+  },
+  rapLabel: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
+    lineHeight: 16,
+  },
   quickActionCard: {
     flexBasis: '31%',
     flexGrow: 1,
@@ -406,6 +502,28 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 3,
+  },
+  channelCard: {
+    alignItems: 'flex-start',
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 22,
+    borderWidth: 1,
+    elevation: 3,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16,
+    shadowColor: instructorPalette.shadow,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+  },
+  channelIcon: {
+    alignItems: 'center',
+    borderRadius: 19,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
   },
   validationIcon: {
     width: 36,

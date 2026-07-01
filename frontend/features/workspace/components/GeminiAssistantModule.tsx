@@ -1,3 +1,18 @@
+import { instructorPalette } from '@/features/instructor/theme';
+import { UserAvatar } from '@/features/workspace/components/UserAvatar';
+import type {
+  AuthenticatedSession,
+  WorkspaceAssistantProject,
+  WorkspaceAssistantPrompt,
+  WorkspaceChatChannel,
+  WorkspaceChatMessage,
+} from '@/features/workspace/types';
+import { generateGeminiReply } from '@/services/gemini';
+import { saveProjectMessages, subscribeToProjectMessages } from '@/services/messages';
+import {
+  createSpeechRecognitionSession,
+  isSpeechRecognitionSupported,
+} from '@/services/speechRecognition';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -10,20 +25,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { instructorPalette } from '@/features/instructor/theme';
-import { UserAvatar } from '@/features/workspace/components/UserAvatar';
-import { generateGeminiReply } from '@/services/gemini';
-import { saveProjectMessages, subscribeToProjectMessages } from '@/services/messages';
-import {
-  createSpeechRecognitionSession,
-  isSpeechRecognitionSupported,
-} from '@/services/speechRecognition';
-import type {
-  AuthenticatedSession,
-  WorkspaceAssistantProject,
-  WorkspaceAssistantPrompt,
-  WorkspaceChatMessage,
-} from '@/features/workspace/types';
 
 type GeminiAssistantModuleProps = {
   assistantQuestionsEnabledDefault?: boolean;
@@ -40,6 +41,7 @@ type GeminiAssistantModuleProps = {
   tone?: Partial<GeminiAssistantTone>;
   title: string;
   voiceEnabled?: boolean;
+  chatChannel?: WorkspaceChatChannel;
   welcomeMessage: string;
 };
 
@@ -125,6 +127,7 @@ export function GeminiAssistantModule({
   tone,
   title,
   voiceEnabled = true,
+  chatChannel = 'ai',
   welcomeMessage,
 }: GeminiAssistantModuleProps) {
   const assistantTone = { ...defaultAssistantTone, ...tone };
@@ -133,6 +136,20 @@ export function GeminiAssistantModule({
   const [selectedProjectId, setSelectedProjectId] = useState(selectedDefaultProject);
   const [selectedPromptId, setSelectedPromptId] = useState('');
   const [messages, setMessages] = useState<WorkspaceChatMessage[]>([]);
+  const chatChannelLabel = useMemo(() => {
+    switch (chatChannel) {
+      case 'admin':
+        return 'Administrador';
+      case 'pasante':
+        return 'Pasante';
+      case 'instructor':
+        return 'Instructor';
+      case 'general':
+        return 'General';
+      default:
+        return 'IA';
+    }
+  }, [chatChannel]);
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -180,6 +197,7 @@ export function GeminiAssistantModule({
       {
         projectId: selectedProjectId,
         session,
+        chatChannel,
       },
       (payload) => {
         if (!payload || payload.messages.length === 0) {
@@ -202,7 +220,7 @@ export function GeminiAssistantModule({
     return () => {
       unsubscribe();
     };
-  }, [assistantQuestionsEnabledDefault, selectedProjectId, session, welcomeHistory]);
+  }, [assistantQuestionsEnabledDefault, chatChannel, selectedProjectId, session, welcomeHistory]);
 
   useEffect(() => {
     return () => {
@@ -252,6 +270,7 @@ export function GeminiAssistantModule({
       projectId: selectedProjectId,
       projectTitle: selectedProject?.title || emptyStateLabel,
       session,
+      chatChannel,
     });
   };
 
@@ -271,6 +290,8 @@ export function GeminiAssistantModule({
       id: buildMessageId('user'),
       role: 'user',
       text: normalized,
+      authorName: session.name,
+      authorRole: session.role,
       createdAt: new Date().toISOString(),
       inputMode,
     };
@@ -309,6 +330,8 @@ export function GeminiAssistantModule({
           id: buildMessageId('model'),
           role: 'model' as const,
           text: responseText,
+          authorName: 'Gemini',
+          authorRole: 'model',
           createdAt: new Date().toISOString(),
           inputMode: 'manual' as const,
         },
@@ -390,6 +413,9 @@ export function GeminiAssistantModule({
           <Text style={[styles.heroFootnote, { color: assistantTone.secondary }]}>Sesion de {getFirstName(session.name)}</Text>
           <View style={[styles.heroDot, { backgroundColor: assistantTone.secondary }]} />
           <Text style={[styles.heroFootnote, { color: assistantTone.secondary }]}>{selectedProject?.title || emptyStateLabel}</Text>
+          <View style={[styles.channelBadge, { backgroundColor: assistantTone.secondary + '22' }]}>
+            <Text style={[styles.channelBadgeText, { color: assistantTone.secondary }]}>Canal: {chatChannelLabel}</Text>
+          </View>
         </View>
       </View>
 
@@ -739,6 +765,15 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
     backgroundColor: '#9ADFD2',
+  },
+  channelBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  channelBadgeText: {
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
   },
   selectorCard: {
     borderRadius: 26,
