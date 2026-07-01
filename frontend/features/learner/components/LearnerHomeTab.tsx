@@ -527,8 +527,8 @@ const styles = StyleSheet.create({
     gap: 15,
     marginHorizontal: -30,
     paddingBottom: 22,
-    paddingHorizontal: 28,
-    paddingTop: 18,
+    paddingHorizontal: 31,
+    paddingTop: 28,
   },
   panoramaHeader: {
     alignItems: 'center',
@@ -657,9 +657,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
   },
   featureTitle: {
-    color: learnerPalette.dark,
-    fontFamily: 'SulphurPointBold',
-    fontSize: 21,
+    color: learnerPalette.textMuted,
+    fontFamily: 'PoppinsNeueBold',
+    fontSize: 11,
   },
   progressLabel: {
     color: learnerPalette.progress,

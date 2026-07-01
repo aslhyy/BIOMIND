@@ -1,18 +1,24 @@
 import { ProgressBar, StatusBadge } from '@/features/instructor/components/InstructorUI';
-import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
 import { RealAcademicContext, useAssignedSheetLabels } from '@/features/workspace/components/RealAcademicContext';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
+import { BitacorasReviewPanel } from '@/features/workspace/components/BitacorasReviewPanel';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { WorkspaceBottomBar, type BottomBarTab } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
 import { actualizarPerfilUsuario } from '@/services/auth';
+// @ts-ignore
+import { escucharBitacoras } from '@/services/bitacoras';
+// @ts-ignore
+import { escucharContextoAcademicoUsuario, escucharGruposTrabajo, escucharProyectos } from '@/services/academic';
+// @ts-ignore
+import { escucharTareasPasanteAsignadas, marcarTareaPasanteHecha, marcarTareaPasantePendiente } from '@/services/pasanteTasks';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   pasanteAssignedLearners,
@@ -143,6 +149,70 @@ type PasanteWorkspaceProps = {
   onSignOut: () => Promise<void> | void;
 };
 
+type RealProject = {
+  id: string;
+  titulo?: string;
+  descripcion?: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  competenciaNombre?: string;
+  rapDescripcion?: string;
+  instructorUid?: string;
+  aprendizIds?: string[];
+  grupoId?: string | null;
+  estado?: string;
+  progreso?: number;
+  activo?: boolean;
+};
+
+type RealLearner = {
+  id: string;
+  nombre?: string;
+  correo?: string;
+  fichaId?: string | null;
+};
+
+type RealGroup = {
+  id: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  aprendizIds?: string[];
+  instructorUid?: string;
+};
+
+type RealSheet = {
+  id: string;
+  numero?: string;
+  programaNombre?: string;
+};
+
+type RealBitacora = {
+  id: string;
+  aprendizUid?: string;
+  aprendizNombre?: string;
+  proyectoId?: string;
+  proyectoTitulo?: string;
+  fichaId?: string;
+  fecha?: string;
+  descripcion?: string;
+  estado?: string;
+  observacion?: string;
+};
+
+type PasanteAssignedTask = {
+  id: string;
+  titulo?: string;
+  descripcion?: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  proyectoId?: string;
+  proyectoTitulo?: string;
+  observacionInstructor?: string;
+  observacionPasante?: string;
+  estado?: 'Pendiente' | 'Hecho' | 'Validada';
+  validadaPorInstructor?: boolean;
+};
+
 export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<PasanteTab>('inicio');
@@ -150,6 +220,13 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
   const [autoSummaryEnabled, setAutoSummaryEnabled] = useState(true);
   const [evidenceGuideEnabled, setEvidenceGuideEnabled] = useState(true);
   const [assistantProjectId, setAssistantProjectId] = useState(pasanteProjects[0]?.id ?? 'general');
+  const [realProjects, setRealProjects] = useState<RealProject[]>([]);
+  const [realSheets, setRealSheets] = useState<RealSheet[]>([]);
+  const [realLearners, setRealLearners] = useState<RealLearner[]>([]);
+  const [realGroups, setRealGroups] = useState<RealGroup[]>([]);
+  const [realBitacoras, setRealBitacoras] = useState<RealBitacora[]>([]);
+  const [realTasks, setRealTasks] = useState<PasanteAssignedTask[]>([]);
+  const [realFeedback, setRealFeedback] = useState('');
   const assignedFichas = Array.isArray(session.fichasAsignadas) ? session.fichasAsignadas : [];
   const assignedFichaSet = new Set(assignedFichas.map(String));
   const assignedProjectsFromSession = assignedFichaSet.size
@@ -162,6 +239,93 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
   const assignedLearners = pasanteAssignedLearners.filter((learner) =>
     assignedProjects.some((project) => project.id === learner.projectId)
   );
+
+  useEffect(() => {
+    const handleError = (error: any) => setRealFeedback(error?.message || 'No pudimos cargar la información del pasante.');
+    const unsubscribeContext = escucharContextoAcademicoUsuario(
+      session,
+      (context: any) => {
+        setRealSheets(context.fichas || []);
+        setRealLearners(context.aprendices || []);
+      },
+      handleError
+    );
+    const unsubscribeProjects = escucharProyectos(
+      (items: RealProject[]) => setRealProjects(items),
+      handleError
+    );
+    const unsubscribeGroups = escucharGruposTrabajo(
+      (items: RealGroup[]) => setRealGroups(items),
+      handleError
+    );
+    const unsubscribeBitacoras = escucharBitacoras(setRealBitacoras, handleError);
+    const unsubscribeTasks = escucharTareasPasanteAsignadas(session.uid, setRealTasks, handleError);
+
+    return () => {
+      unsubscribeContext?.();
+      unsubscribeProjects?.();
+      unsubscribeGroups?.();
+      unsubscribeBitacoras?.();
+      unsubscribeTasks?.();
+    };
+  }, [session]);
+
+  const inheritedFichaSet = new Set([
+    ...Array.from(assignedFichaSet),
+    ...realSheets.flatMap((sheet) => [sheet.id, sheet.numero].filter(Boolean).map(String)),
+  ]);
+  const assignedRealProjects = realProjects.filter((project) => {
+    const sheetValues = [project.fichaId, project.fichaNumero].filter(Boolean).map(String);
+    return project.activo !== false
+      && project.estado !== 'Inactivo'
+      && (
+        project.instructorUid === session.instructorUid
+        || sheetValues.some((value) => inheritedFichaSet.has(value))
+      );
+  });
+  const realProjectIds = new Set(assignedRealProjects.map((project) => project.id));
+  const realProjectGroups = realGroups.filter((group) =>
+    assignedRealProjects.some((project) => project.grupoId === group.id)
+  );
+  const realBitacorasForProjects = realBitacoras.filter((bitacora) => realProjectIds.has(bitacora.proyectoId || ''));
+  const realMetrics: PasanteMetric[] = [
+    {
+      id: 'fichas-reales',
+      label: 'Fichas asignadas',
+      value: String(realSheets.length || assignedFichas.length),
+      caption: 'Grupos que acompañas',
+      icon: 'school-outline',
+      accent: pasantePalette.primary,
+      soft: pasantePalette.aquaSoft,
+    },
+    {
+      id: 'proyectos-reales',
+      label: 'Proyectos activos',
+      value: String(assignedRealProjects.length),
+      caption: 'Con seguimiento técnico',
+      icon: 'sprout-outline',
+      accent: pasantePalette.green,
+      soft: pasantePalette.softGreen,
+    },
+    {
+      id: 'bitacoras-reales',
+      label: 'Bitácoras',
+      value: String(realBitacorasForProjects.length),
+      caption: 'Disponibles para observar',
+      icon: 'notebook-check-outline',
+      accent: pasantePalette.secondary,
+      soft: '#FFF1EB',
+    },
+    {
+      id: 'tareas-reales',
+      label: 'Tareas pendientes',
+      value: String(realTasks.filter((task) => task.estado !== 'Validada').length),
+      caption: 'Asignadas por instructor',
+      icon: 'clipboard-check-outline',
+      accent: pasantePalette.primary,
+      soft: pasantePalette.surfaceMuted,
+    },
+  ];
 
   const [fontsLoaded] = useFonts({
     PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
@@ -176,7 +340,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
 
   // Bloqueo: si el pasante no tiene instructor asignado o no tiene fichas, mostrar mensaje claro
   const hasInstructor = Boolean(session.instructorUid);
-  const hasFichas = assignedFichas.length > 0;
+  const hasFichas = assignedFichas.length > 0 || realSheets.length > 0;
 
   if (!hasInstructor || !hasFichas) {
     return (
@@ -218,20 +382,30 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
           {activeTab === 'inicio' && (
             <>
               <PasanteHomeTab
+                metrics={realMetrics}
                 projects={assignedProjects}
+                realProjects={assignedRealProjects}
                 session={session}
                 tasks={assignedTasks}
+                realTasks={realTasks}
                 onOpenAssistant={openAssistantForProject}
               />
+              {realFeedback ? <Text style={styles.feedbackText}>{realFeedback}</Text> : null}
               <RealAcademicContext session={session} />
             </>
           )}
           {activeTab === 'seguimiento' && (
             <PasanteTrackingTab
+              bitacoras={realBitacorasForProjects}
+              groups={realProjectGroups}
               learners={assignedLearners}
+              realLearners={realLearners}
+              realProjects={assignedRealProjects}
+              realTasks={realTasks}
               projects={assignedProjects}
               tasks={assignedTasks}
               onOpenAssistant={openAssistantForProject}
+              session={session}
             />
           )}
           {activeTab === 'asistente' && (
@@ -357,12 +531,18 @@ function SectionTitle({ title }: { title: string }) {
 }
 
 function PasanteHomeTab({
+  metrics,
   projects,
+  realProjects,
+  realTasks,
   session,
   tasks,
   onOpenAssistant,
 }: {
+  metrics: PasanteMetric[];
   projects: PasanteProject[];
+  realProjects: RealProject[];
+  realTasks: PasanteAssignedTask[];
   session: AuthenticatedSession;
   tasks: PasanteTask[];
   onOpenAssistant: (projectId: string) => void;
@@ -372,23 +552,11 @@ function PasanteHomeTab({
       <View style={styles.startCard}>
         <SectionTitle title="Resumen de práctica" />
         <View style={styles.metricsRow}>
-          {pasanteMetrics.map((metric) => (
+          {(metrics.length ? metrics : pasanteMetrics).map((metric) => (
             <MetricCard key={metric.id} metric={metric} />
           ))}
         </View>
       </View>
-
-      <CurrentTrimesterSummary
-        colors={{
-          accent: pasantePalette.primary,
-          background: pasantePalette.surface,
-          border: pasantePalette.border,
-          iconBackground: pasantePalette.surfaceMuted,
-          muted: pasantePalette.textMuted,
-          text: pasantePalette.text,
-        }}
-        session={session}
-      />
 
       <SectionHeading
         actionLabel="Hoy"
@@ -396,7 +564,11 @@ function PasanteHomeTab({
         title="Agenda técnica"
       />
       <View style={styles.stack}>
-        {tasks.length ? (
+        {realTasks.length ? (
+          realTasks.slice(0, 3).map((task) => (
+            <DashboardPasanteTaskCard key={task.id} task={task} />
+          ))
+        ) : tasks.length ? (
           tasks.slice(0, 2).map((task) => (
             <TaskCard key={task.id} projects={projects} task={task} onOpenAssistant={onOpenAssistant} />
           ))
@@ -411,7 +583,9 @@ function PasanteHomeTab({
         title="Proyectos asignados"
       />
       <View style={styles.stack}>
-        {projects.slice(0, 2).map((project) => (
+        {realProjects.length ? realProjects.slice(0, 3).map((project) => (
+          <RealProjectCard key={project.id} project={project} />
+        )) : projects.slice(0, 2).map((project) => (
           <ProjectCard key={project.id} project={project} onOpenAssistant={onOpenAssistant} />
         ))}
       </View>
@@ -420,16 +594,41 @@ function PasanteHomeTab({
 }
 
 function PasanteTrackingTab({
+  bitacoras,
+  groups,
   learners,
   projects,
+  realLearners,
+  realProjects,
+  realTasks,
+  session,
   tasks,
   onOpenAssistant,
 }: {
+  bitacoras: RealBitacora[];
+  groups: RealGroup[];
   learners: PasanteAssignedLearner[];
   projects: PasanteProject[];
+  realLearners: RealLearner[];
+  realProjects: RealProject[];
+  realTasks: PasanteAssignedTask[];
+  session: AuthenticatedSession;
   tasks: PasanteTask[];
   onOpenAssistant: (projectId: string) => void;
 }) {
+  if (realProjects.length) {
+    return (
+      <PasanteTechnicalTracking
+        bitacoras={bitacoras}
+        groups={groups}
+        learners={realLearners}
+        projects={realProjects}
+        session={session}
+        tasks={realTasks}
+      />
+    );
+  }
+
   return (
     <>
       <IntroCard
@@ -500,6 +699,169 @@ function PasanteTrackingTab({
           <InstructorMessageCard key={message.id} message={message} />
         ))}
       </View>
+    </>
+  );
+}
+
+function PasanteTechnicalTracking({
+  bitacoras,
+  groups,
+  learners,
+  projects,
+  session,
+  tasks,
+}: {
+  bitacoras: RealBitacora[];
+  groups: RealGroup[];
+  learners: RealLearner[];
+  projects: RealProject[];
+  session: AuthenticatedSession;
+  tasks: PasanteAssignedTask[];
+}) {
+  const [selectedSheet, setSelectedSheet] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [selectedLearnerId, setSelectedLearnerId] = useState('');
+  const [taskObservation, setTaskObservation] = useState('');
+  const [feedback, setFeedback] = useState('');
+
+  const sheets = Array.from(new Map(projects.map((project) => [
+    project.fichaId || project.fichaNumero || '',
+    {
+      id: project.fichaId || project.fichaNumero || '',
+      label: `Ficha ${project.fichaNumero || project.fichaId || 'sin ficha'}`,
+    },
+  ])).values()).filter((sheet) => sheet.id);
+
+  useEffect(() => {
+    if (!selectedSheet || !sheets.some((sheet) => sheet.id === selectedSheet)) {
+      setSelectedSheet(sheets[0]?.id || '');
+      setSelectedProjectId('');
+      setSelectedLearnerId('');
+    }
+  }, [selectedSheet, sheets]);
+
+  const sheetProjects = projects.filter((project) => (project.fichaId || project.fichaNumero || '') === selectedSheet);
+  const selectedProject = sheetProjects.find((project) => project.id === selectedProjectId) || sheetProjects[0];
+  const selectedGroup = groups.find((group) => group.id === selectedProject?.grupoId);
+  const learnerIds = new Set<string>();
+  (selectedProject?.aprendizIds || []).forEach((id) => learnerIds.add(id));
+  (selectedGroup?.aprendizIds || []).forEach((id) => learnerIds.add(id));
+  const projectLearners = learners.filter((learner) => learnerIds.has(learner.id));
+  const filteredLearners = projectLearners;
+  const projectBitacoras = bitacoras
+    .filter((bitacora) => bitacora.proyectoId === selectedProject?.id)
+    .filter((bitacora) => !selectedLearnerId || bitacora.aprendizUid === selectedLearnerId);
+  const reviewed = bitacoras.filter((bitacora) => bitacora.proyectoId === selectedProject?.id && bitacora.observacion).length;
+  const approved = bitacoras.filter((bitacora) => bitacora.proyectoId === selectedProject?.id && bitacora.estado === 'Aprobada').length;
+  const total = bitacoras.filter((bitacora) => bitacora.proyectoId === selectedProject?.id).length;
+
+  const confirmDone = (task: PasanteAssignedTask) => {
+    Alert.alert(
+      'Marcar tarea como hecha',
+      `¿Confirmas que terminaste "${task.titulo || 'esta tarea'}"?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            try {
+              await marcarTareaPasanteHecha(task.id, taskObservation);
+              setTaskObservation('');
+              setFeedback('Tarea marcada como hecha. El instructor debe validarla.');
+            } catch (error) {
+              const typedError = error as { message?: string };
+              setFeedback(typedError.message || 'No pudimos actualizar la tarea.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  return (
+    <>
+      <IntroCard
+        label="Seguimiento técnico"
+        text="Consulta proyectos por ficha, revisa aprendices y deja observaciones en bitácoras sin modificar estados."
+        title="Acompañamiento real por ficha."
+      />
+
+      <View style={styles.startCard}>
+        <SectionTitle title="Filtros de seguimiento" />
+        <PasanteSearchableSelector
+          label="Ficha"
+          options={sheets.map((sheet, index) => ({ label: `${index + 1}. ${sheet.label}`, value: sheet.id }))}
+          value={selectedSheet}
+          onChange={(sheetId) => {
+            setSelectedSheet(sheetId);
+            setSelectedProjectId('');
+            setSelectedLearnerId('');
+          }}
+        />
+        <PasanteSearchableSelector
+          label="Proyecto"
+          options={sheetProjects.map((project, index) => ({
+            label: `${index + 1}. ${project.titulo || 'Proyecto'}`,
+            subtitle: project.competenciaNombre || 'Sin competencia',
+            value: project.id,
+          }))}
+          value={selectedProject?.id || ''}
+          onChange={(projectId) => {
+            setSelectedProjectId(projectId);
+            setSelectedLearnerId('');
+          }}
+        />
+      </View>
+
+      {false && tasks.length ? (
+        <>
+          <SectionHeading actionLabel={`${tasks.length}`} subtitle="Tareas asignadas por el instructor." title="Mis tareas" />
+          <View style={styles.stack}>
+            {tasks.map((task) => (
+              <View key={task.id} style={styles.taskCard}>
+                <AssignedPasanteTaskCard task={task} />
+                {task.estado !== 'Hecho' && task.estado !== 'Validada' ? (
+                  <>
+                    <Field label="Observación del pasante" value={taskObservation} onChangeText={setTaskObservation} />
+                    <Pressable onPress={() => confirmDone(task)} style={styles.secondaryButton}>
+                      <Text style={styles.secondaryButtonText}>Marcar como hecho</Text>
+                    </Pressable>
+                  </>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      <View style={styles.startCard}>
+        <SectionTitle title="Avance del proyecto" />
+        <View style={styles.metricsRow}>
+          <MetricCard metric={{ id: 'rev', label: 'Observadas', value: `${reviewed}/${total}`, caption: 'Bitácoras con retroalimentación', icon: 'eye-check-outline', accent: pasantePalette.primary, soft: pasantePalette.aquaSoft }} />
+          <MetricCard metric={{ id: 'apr', label: 'Aprobadas', value: `${approved}`, caption: 'Validadas por instructor', icon: 'check-decagram-outline', accent: pasantePalette.green, soft: pasantePalette.softGreen }} />
+        </View>
+      </View>
+
+      <SectionHeading actionLabel={`${projectLearners.length}`} subtitle="Busca un aprendiz específico o mira todos." title="Aprendices del proyecto" />
+      <View style={styles.startCard}>
+        <PasanteSearchableSelector
+          label="Aprendiz"
+          options={[
+            { label: 'Todos', subtitle: 'Ver bitácoras de todo el proyecto', value: '' },
+            ...filteredLearners.map((learner, index) => ({
+              label: `${index + 1}. ${learner.nombre || learner.correo || 'Aprendiz'}`,
+              subtitle: learner.correo || '',
+              value: learner.id,
+            })),
+          ]}
+          value={selectedLearnerId}
+          onChange={setSelectedLearnerId}
+        />
+      </View>
+
+      <SectionHeading actionLabel={`${projectBitacoras.length}`} subtitle="El pasante solo puede registrar observaciones." title="Bitácoras" />
+      <BitacorasReviewPanel bitacoras={projectBitacoras as any} mode="observation" session={session} />
+      {feedback ? <Text style={styles.feedbackText}>{feedback}</Text> : null}
     </>
   );
 }
@@ -675,6 +1037,131 @@ function PasanteProfileTab({
         <ToggleRow title="Guía de evidencias" description="Ordena fotos, hallazgos y siguientes pasos." value={evidenceGuideEnabled} onValueChange={onEvidenceGuideChange} />
       </View>
     </>
+  );
+}
+
+function RealProjectCard({ project }: { project: RealProject }) {
+  return (
+    <View style={styles.projectCard}>
+      <View style={styles.cardHeader}>
+        <View style={styles.projectIcon}>
+          <MaterialCommunityIcons name="sprout-outline" size={18} color={pasantePalette.green} />
+        </View>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardTitle}>{project.titulo || 'Proyecto sin nombre'}</Text>
+          <Text style={styles.cardMeta}>Ficha {project.fichaNumero || project.fichaId || 'sin ficha'}</Text>
+        </View>
+        <Text style={styles.percent}>{Number(project.progreso || 0)}%</Text>
+      </View>
+      <ProgressBar accent={pasantePalette.green} progress={Number(project.progreso || 0)} soft={pasantePalette.softGreen} />
+      <View style={styles.badgeRow}>
+        <StatusBadge accent={pasantePalette.primary} label={project.estado || 'Pendiente'} soft={pasantePalette.aquaSoft} />
+      </View>
+      <Text style={styles.cardText}>
+        {project.competenciaNombre || 'Sin competencia'} · {project.rapDescripcion || 'RAP pendiente'}
+      </Text>
+    </View>
+  );
+}
+
+function AssignedPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
+  const accent = task.estado === 'Validada' ? pasantePalette.green : task.estado === 'Hecho' ? pasantePalette.secondary : pasantePalette.primary;
+
+  return (
+    <View style={styles.taskCard}>
+      <View style={styles.cardHeader}>
+        <View style={[styles.taskIcon, { backgroundColor: `${accent}22` }]}>
+          <MaterialCommunityIcons name="clipboard-check-outline" size={18} color={accent} />
+        </View>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardTitle}>{task.titulo || 'Tarea asignada'}</Text>
+          <Text style={styles.cardMeta}>{task.proyectoTitulo || `Ficha ${task.fichaNumero || task.fichaId || 'general'}`}</Text>
+        </View>
+        <StatusBadge accent={accent} label={task.estado || 'Pendiente'} soft={`${accent}1F`} />
+      </View>
+      {task.descripcion ? <Text style={styles.cardText}>{task.descripcion}</Text> : null}
+      {task.observacionInstructor ? <Text style={styles.qaLabel}>Instructor: {task.observacionInstructor}</Text> : null}
+      {task.observacionPasante ? <Text style={styles.qaLabel}>Pasante: {task.observacionPasante}</Text> : null}
+    </View>
+  );
+}
+
+function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
+  const [observation, setObservation] = useState(task.observacionPasante || '');
+  const [feedback, setFeedback] = useState('');
+
+  useEffect(() => {
+    setObservation(task.observacionPasante || '');
+  }, [task.observacionPasante]);
+
+  const confirmDone = () => {
+    Alert.alert(
+      'Marcar tarea como hecha',
+      `¿Confirmas que terminaste "${task.titulo || 'esta tarea'}"?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            try {
+              await marcarTareaPasanteHecha(task.id, observation);
+              setFeedback('Tarea marcada como hecha. El instructor debe validarla.');
+            } catch (error) {
+              const typedError = error as { message?: string };
+              setFeedback(typedError.message || 'No pudimos actualizar la tarea.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const confirmPending = () => {
+    Alert.alert(
+      'Volver a pendiente',
+      `¿Quieres volver a dejar "${task.titulo || 'esta tarea'}" como pendiente para corregirla?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            try {
+              await marcarTareaPasantePendiente(task.id, observation);
+              setFeedback('Tarea marcada nuevamente como pendiente.');
+            } catch (error) {
+              const typedError = error as { message?: string };
+              setFeedback(typedError.message || 'No pudimos actualizar la tarea.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  return (
+    <View style={styles.taskCard}>
+      <AssignedPasanteTaskCard task={task} />
+      {task.estado !== 'Validada' ? (
+        <>
+          <Field label="Observación del pasante" value={observation} onChangeText={setObservation} />
+          {task.estado === 'Hecho' ? (
+            <View style={styles.badgeRow}>
+              <Pressable onPress={confirmPending} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>Volver a pendiente</Text>
+              </Pressable>
+              <Pressable onPress={confirmDone} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>Actualizar entrega</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable onPress={confirmDone} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Marcar como hecho</Text>
+            </Pressable>
+          )}
+        </>
+      ) : null}
+      {feedback ? <Text style={styles.feedbackText}>{feedback}</Text> : null}
+    </View>
   );
 }
 
@@ -872,6 +1359,71 @@ function IntroCard({ label, text, title }: { label: string; text: string; title:
   );
 }
 
+function PasanteSearchableSelector({
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: { label: string; subtitle?: string; value: string }[];
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const selected = options.find((option) => option.value === value) || options[0];
+  const filteredOptions = options.filter((option) =>
+    `${option.label} ${option.subtitle || ''}`.toLowerCase().includes(query.trim().toLowerCase())
+  );
+
+  return (
+    <View style={styles.dropdownBlock}>
+      <Text style={styles.dropdownLabel}>{label}</Text>
+      <Pressable onPress={() => setOpen((current) => !current)} style={styles.dropdownTrigger}>
+        <Text numberOfLines={1} style={styles.dropdownTriggerText}>{selected?.label || 'Selecciona una opción'}</Text>
+        <MaterialCommunityIcons name={open ? 'chevron-up' : 'chevron-down'} size={22} color={pasantePalette.secondary} />
+      </Pressable>
+      {open ? (
+        <View style={styles.dropdownPanel}>
+          <View style={styles.dropdownSearch}>
+            <MaterialCommunityIcons name="magnify" size={18} color={pasantePalette.textMuted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Buscar..."
+              placeholderTextColor={pasantePalette.textMuted}
+              style={styles.dropdownSearchInput}
+            />
+          </View>
+          {filteredOptions.map((option) => {
+            const active = option.value === value;
+            return (
+              <Pressable
+                key={`${label}-${option.value || 'todos'}`}
+                onPress={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                  setQuery('');
+                }}
+                style={[styles.dropdownOption, active && styles.dropdownOptionActive]}>
+                {active ? <MaterialCommunityIcons name="check-circle" size={19} color={pasantePalette.primary} /> : null}
+                <View style={styles.cardCopy}>
+                  <Text numberOfLines={1} style={[styles.dropdownOptionText, active && styles.dropdownOptionTextActive]}>
+                    {option.label}
+                  </Text>
+                  {option.subtitle ? <Text numberOfLines={1} style={styles.dropdownOptionSubtext}>{option.subtitle}</Text> : null}
+                </View>
+              </Pressable>
+            );
+          })}
+          {!filteredOptions.length ? <Text style={styles.emptyText}>No hay resultados.</Text> : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function Field({
   editable = true,
   label,
@@ -1014,10 +1566,92 @@ const styles = StyleSheet.create({
   },
   startCard: {
     backgroundColor: pasantePalette.surface,
-    marginHorizontal: -30,
+    borderColor: pasantePalette.border,
+    borderRadius: 30,
+    borderWidth: 1,
+    elevation: 3,
     paddingVertical: 20,
     paddingHorizontal: 22,
     gap: 16,
+    shadowColor: pasantePalette.shadow,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+  },
+  dropdownBlock: { gap: 9 },
+  dropdownLabel: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  dropdownTrigger: {
+    alignItems: 'center',
+    backgroundColor: '#FAFCFB',
+    borderColor: pasantePalette.border,
+    borderRadius: 20,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 58,
+    paddingHorizontal: 14,
+  },
+  dropdownTriggerText: {
+    color: pasantePalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  dropdownPanel: {
+    backgroundColor: pasantePalette.surface,
+    borderColor: pasantePalette.border,
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 10,
+    padding: 12,
+  },
+  dropdownSearch: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.background,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  dropdownSearchInput: {
+    color: pasantePalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    minHeight: 42,
+  },
+  dropdownOption: {
+    alignItems: 'center',
+    backgroundColor: '#FAFCFB',
+    borderColor: pasantePalette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 9,
+    minHeight: 50,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  dropdownOptionActive: {
+    borderColor: pasantePalette.primary,
+    borderWidth: 2,
+  },
+  dropdownOptionText: {
+    color: pasantePalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  dropdownOptionTextActive: {
+    color: pasantePalette.primary,
+  },
+  dropdownOptionSubtext: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
   },
   sectionHeader: {
     alignItems: 'flex-end',
@@ -1227,6 +1861,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  filterChip: {
+    backgroundColor: pasantePalette.surface,
+    borderColor: pasantePalette.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: '100%',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  filterChipActive: {
+    backgroundColor: pasantePalette.aquaSoft,
+    borderColor: pasantePalette.primary,
+  },
+  filterChipText: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  filterChipTextActive: {
+    color: pasantePalette.primary,
   },
   cardText: {
     color: pasantePalette.textMuted,

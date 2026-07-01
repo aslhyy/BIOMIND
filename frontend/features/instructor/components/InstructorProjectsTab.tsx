@@ -1,12 +1,13 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   cambiarEstadoProyecto,
   escucharContextoAcademicoUsuario,
   escucharGruposTrabajo,
   escucharProyectos,
+  escucharTrimestres,
   guardarGrupoTrabajo,
   guardarProyectoAcademico,
   quitarIntegranteGrupo,
@@ -17,6 +18,14 @@ import { IconLabel, ProgressBar, SectionHeading, StatusBadge } from './Instructo
 import { BitacorasReviewPanel } from '@/features/workspace/components/BitacorasReviewPanel';
 // @ts-ignore
 import { escucharBitacoras } from '@/services/bitacoras';
+// @ts-ignore
+import {
+  actualizarTareaPasante,
+  eliminarTareaPasante,
+  escucharTareasPasantePorInstructor,
+  guardarTareaPasante,
+  validarTareaPasante,
+} from '@/services/pasanteTasks';
 
 type AcademicSheet = {
   id: string;
@@ -29,6 +38,8 @@ type AcademicUser = {
   nombre?: string;
   correo?: string;
   fichaId?: string | null;
+  fichasAsignadas?: string[];
+  instructorUid?: string;
 };
 
 type AcademicCompetence = {
@@ -75,6 +86,14 @@ type AcademicProject = {
   progreso?: number;
 };
 
+type Trimester = {
+  id: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  fechaFin?: string;
+  estado?: string;
+};
+
 type AcademicBitacora = {
   id: string;
   aprendizUid?: string;
@@ -99,6 +118,24 @@ type AcademicBitacora = {
   revisadoPorUid?: string;
   revisadoPorNombre?: string;
   revisadoPorRol?: string;
+};
+
+type PasanteTaskRecord = {
+  id: string;
+  titulo?: string;
+  descripcion?: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  proyectoId?: string;
+  proyectoTitulo?: string;
+  pasanteUid?: string;
+  pasanteNombre?: string;
+  instructorUid?: string;
+  instructorNombre?: string;
+  observacionInstructor?: string;
+  observacionPasante?: string;
+  estado?: 'Pendiente' | 'Hecho' | 'Validada';
+  validadaPorInstructor?: boolean;
 };
 
 type ProjectState = 'Pendiente' | 'En proceso' | 'Aprobado' | 'Desaprobado';
@@ -147,23 +184,38 @@ const emptyGroupForm: GroupForm = {
   aprendizIds: [],
 };
 
-const projectStates: ProjectState[] = ['Pendiente', 'En proceso', 'Aprobado', 'Desaprobado'];
+const emptyTaskForm = {
+  id: '',
+  titulo: '',
+  descripcion: '',
+  fichaId: '',
+  proyectoId: '',
+  pasanteUid: '',
+  observacionInstructor: '',
+};
 
 export function InstructorProjectsTab({ session }: { session: AuthenticatedSession }) {
   const [sheets, setSheets] = useState<AcademicSheet[]>([]);
   const [learners, setLearners] = useState<AcademicUser[]>([]);
+  const [pasantes, setPasantes] = useState<AcademicUser[]>([]);
   const [competences, setCompetences] = useState<AcademicCompetence[]>([]);
   const [raps, setRaps] = useState<AcademicRap[]>([]);
   const [projects, setProjects] = useState<AcademicProject[]>([]);
   const [groups, setGroups] = useState<WorkGroup[]>([]);
+  const [trimesters, setTrimesters] = useState<Trimester[]>([]);
   const [bitacoras, setBitacoras] = useState<AcademicBitacora[]>([]);
+  const [pasanteTasks, setPasanteTasks] = useState<PasanteTaskRecord[]>([]);
   const [projectForm, setProjectForm] = useState<ProjectForm>(emptyProjectForm);
   const [groupForm, setGroupForm] = useState<GroupForm>(emptyGroupForm);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [selectedListSheetId, setSelectedListSheetId] = useState('');
   const [selectedLearnerId, setSelectedLearnerId] = useState('');
+  const [projectSearch, setProjectSearch] = useState('');
+  const [groupsVisible, setGroupsVisible] = useState(false);
   const [projectFormOpen, setProjectFormOpen] = useState(false);
   const [groupFormOpen, setGroupFormOpen] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const [taskForm, setTaskForm] = useState(emptyTaskForm);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState('');
@@ -174,6 +226,7 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
       (context: any) => {
         setSheets(context.fichas || []);
         setLearners(context.aprendices || []);
+        setPasantes(context.pasantes || []);
         setCompetences(context.competencias || []);
         setRaps(context.resultados || []);
       },
@@ -187,16 +240,27 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
       (items: WorkGroup[]) => setGroups(items.filter((group) => group.instructorUid === session.uid && group.estado !== 'Inactivo')),
       (groupsError: any) => setError(groupsError?.message || 'No pudimos cargar grupos.')
     );
+    const unsubscribeTrimesters = escucharTrimestres(
+      setTrimesters,
+      (trimestersError: any) => setError(trimestersError?.message || 'No pudimos cargar trimestres.')
+    );
     const unsubscribeBitacoras = escucharBitacoras(
       setBitacoras,
       (bitacorasError: any) => setError(bitacorasError?.message || 'No pudimos cargar las bitácoras.')
+    );
+    const unsubscribeTasks = escucharTareasPasantePorInstructor(
+      session.uid,
+      setPasanteTasks,
+      (tasksError: any) => setError(tasksError?.message || 'No pudimos cargar las tareas de pasantes.')
     );
 
     return () => {
       unsubscribeContext?.();
       unsubscribeProjects?.();
       unsubscribeGroups?.();
+      unsubscribeTrimesters?.();
       unsubscribeBitacoras?.();
+      unsubscribeTasks?.();
     };
   }, [session]);
 
@@ -211,7 +275,12 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
       fichaId: current.fichaId || sheets[0]?.id || '',
     }));
     setSelectedListSheetId((current) => current || sheets[0]?.id || '');
-  }, [competences, sheets]);
+    setTaskForm((current) => ({
+      ...current,
+      fichaId: current.fichaId || sheets[0]?.id || '',
+      pasanteUid: current.pasanteUid || pasantes[0]?.id || '',
+    }));
+  }, [competences, pasantes, sheets]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) || projects[0],
@@ -254,13 +323,28 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
     [selectedListSheetId, sheets]
   );
   const filteredProjects = useMemo(
-    () => projects.filter((project) => project.fichaId === selectedListSheetId),
-    [projects, selectedListSheetId]
+    () => {
+      const normalizedSearch = projectSearch.trim().toLowerCase();
+      return projects
+        .filter((project) => project.fichaId === selectedListSheetId)
+        .filter((project) =>
+          `${project.titulo || ''} ${project.competenciaNombre || ''} ${project.rapDescripcion || ''} ${project.estado || ''}`
+            .toLowerCase()
+            .includes(normalizedSearch)
+        );
+    },
+    [projects, projectSearch, selectedListSheetId]
   );
   const filteredGroups = useMemo(
     () => groups.filter((group) => group.fichaId === selectedListSheetId),
     [groups, selectedListSheetId]
   );
+  const taskProjectsForSheet = useMemo(
+    () => projects.filter((project) => !taskForm.fichaId || project.fichaId === taskForm.fichaId),
+    [projects, taskForm.fichaId]
+  );
+  const visibleProjects = useMemo(() => filteredProjects.slice(0, 8), [filteredProjects]);
+  const visibleGroups = useMemo(() => filteredGroups.slice(0, 6), [filteredGroups]);
   const selectedTrackingProject = useMemo(
     () => filteredProjects.find((project) => project.id === selectedProjectId) || filteredProjects[0],
     [filteredProjects, selectedProjectId]
@@ -304,6 +388,17 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
   const approvalProgress = allProjectBitacoras.length
     ? Math.round((approvedCount / allProjectBitacoras.length) * 100)
     : 0;
+  const selectedSheetAutomaticState = useMemo(() => {
+    const activeTrimester = trimesters.find((trimester) =>
+      trimester.estado !== 'Inactivo'
+      && (trimester.fichaId === selectedListSheetId || trimester.fichaNumero === selectedListSheet?.numero)
+      && isWithinLastWeek(trimester.fechaFin)
+    );
+    const allSheetProjectsApproved = filteredProjects.length > 0
+      && filteredProjects.every((project) => project.estado === 'Aprobado');
+
+    return activeTrimester && allSheetProjectsApproved ? 'Aprobado' : 'Pendiente';
+  }, [filteredProjects, selectedListSheet?.numero, selectedListSheetId, trimesters]);
 
   useEffect(() => {
     setProjectForm((current) => {
@@ -426,15 +521,123 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
     setFeedback(`Editando grupo ${group.nombre || group.id}.`);
   };
 
-  const setProjectState = (project: AcademicProject, state: ProjectState) => runAction(
-    () => cambiarEstadoProyecto(project.id, state),
-    `Proyecto marcado como ${state.toLowerCase()}.`
-  );
+  const setProjectState = (project: AcademicProject, state: ProjectState) => {
+    if ((project.estado || 'Pendiente') === state) {
+      setFeedback(`El proyecto ya está en estado ${state.toLowerCase()}.`);
+      return;
+    }
 
-  const removeLearnerFromGroup = (groupId: string, learnerId: string) => runAction(
-    () => quitarIntegranteGrupo(groupId, learnerId),
-    'Integrante retirado del grupo.'
-  );
+    Alert.alert(
+      'Confirmar cambio de estado',
+      `¿Seguro que deseas marcar "${project.titulo || 'este proyecto'}" como ${state.toLowerCase()}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: () => runAction(
+            () => cambiarEstadoProyecto(project.id, state),
+            `Proyecto marcado como ${state.toLowerCase()}.`
+          ),
+        },
+      ]
+    );
+  };
+
+  const removeLearnerFromGroup = (groupId: string, learnerId: string) => {
+    Alert.alert(
+      'Quitar integrante',
+      '¿Seguro que deseas quitar este aprendiz del grupo?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          style: 'destructive',
+          onPress: () => runAction(
+            () => quitarIntegranteGrupo(groupId, learnerId),
+            'Integrante retirado del grupo.'
+          ),
+        },
+      ]
+    );
+  };
+
+  const savePasanteTask = () => runAction(async () => {
+    const selectedPasante = pasantes.find((pasante) => pasante.id === taskForm.pasanteUid);
+    const selectedTaskSheet = sheets.find((sheet) => sheet.id === taskForm.fichaId);
+    const selectedTaskProject = projects.find((project) => project.id === taskForm.proyectoId);
+
+    await guardarTareaPasante({
+      ...taskForm,
+      instructorUid: session.uid,
+      instructorNombre: session.name,
+      pasanteNombre: selectedPasante?.nombre || selectedPasante?.correo || '',
+      fichaNumero: selectedTaskSheet?.numero || '',
+      proyectoTitulo: selectedTaskProject?.titulo || '',
+    });
+
+    setTaskForm({
+      ...emptyTaskForm,
+      fichaId: taskForm.fichaId,
+      pasanteUid: taskForm.pasanteUid,
+    });
+  }, taskForm.id ? 'Tarea actualizada correctamente.' : 'Tarea asignada al pasante.');
+
+  const editPasanteTask = (task: PasanteTaskRecord) => {
+    setTaskForm({
+      id: task.id,
+      titulo: task.titulo || '',
+      descripcion: task.descripcion || '',
+      fichaId: task.fichaId || '',
+      proyectoId: task.proyectoId || '',
+      pasanteUid: task.pasanteUid || '',
+      observacionInstructor: task.observacionInstructor || '',
+    });
+  };
+
+  const confirmValidateTask = (task: PasanteTaskRecord) => {
+    Alert.alert(
+      'Validar tarea',
+      `¿Confirmas que "${task.titulo || 'esta tarea'}" fue cumplida correctamente?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => runAction(() => validarTareaPasante(task.id), 'Tarea validada por el instructor.') },
+      ]
+    );
+  };
+
+  const confirmDeleteTask = (task: PasanteTaskRecord) => {
+    Alert.alert(
+      'Eliminar tarea',
+      `¿Seguro que deseas eliminar "${task.titulo || 'esta tarea'}"?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Eliminar', style: 'destructive', onPress: () => runAction(() => eliminarTareaPasante(task.id), 'Tarea eliminada.') },
+      ]
+    );
+  };
+
+  const saveTaskObservation = (task: PasanteTaskRecord, observacionInstructor: string) =>
+    runAction(
+      () => actualizarTareaPasante(task.id, { observacionInstructor }),
+      'Observación de la tarea guardada.'
+    );
+
+  const openProjectFile = async (project: AcademicProject) => {
+    if (!project.archivoUri) {
+      setFeedback('Este proyecto no tiene archivo adjunto.');
+      return;
+    }
+
+    try {
+      await Linking.openURL(project.archivoUri);
+    } catch (fileError: any) {
+      Alert.alert(
+        'No pudimos abrir el archivo',
+        'Este adjunto parece ser un archivo local del dispositivo donde se seleccionó. Si ya no existe en caché, vuelve a adjuntarlo o usa un enlace permanente del documento.'
+      );
+      setFeedback('No pudimos abrir el archivo adjunto. Vuelve a adjuntarlo si era un archivo local.');
+    }
+  };
 
   return (
     <>
@@ -459,7 +662,32 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
           label="Crear grupo de trabajo"
           onPress={() => setGroupFormOpen(true)}
         />
+        <ActionButtonOpen
+          label={groupsVisible ? 'Ocultar grupos' : 'Ver grupos'}
+          onPress={() => setGroupsVisible((current) => !current)}
+        />
+        <ActionButtonOpen
+          label={tasksOpen ? 'Ocultar tareas' : 'Tareas de pasantes'}
+          onPress={() => setTasksOpen((current) => !current)}
+        />
       </View>
+
+      {tasksOpen ? (
+        <PasanteTaskManager
+        form={taskForm}
+        pasantes={pasantes}
+        projects={taskProjectsForSheet}
+        saving={saving}
+        sheets={sheets}
+        tasks={pasanteTasks}
+        onChange={setTaskForm}
+        onDelete={confirmDeleteTask}
+        onEdit={editPasanteTask}
+        onSave={savePasanteTask}
+        onSaveObservation={saveTaskObservation}
+        onValidate={confirmValidateTask}
+      />
+      ) : null}
 
       {projectFormOpen ? (
         <View style={styles.formCard}>
@@ -598,35 +826,94 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
         onSelect={setSelectedListSheetId}
       />
 
+      {groupsVisible ? (
+        <View style={styles.groupsPanel}>
+          <View style={styles.panelHeader}>
+            <View style={styles.copy}>
+              <Text style={styles.panelTitle}>Grupos de la ficha</Text>
+              <Text style={styles.panelText}>
+                {selectedListSheet ? `Ficha ${selectedListSheet.numero || selectedListSheet.id}` : 'Selecciona una ficha para ver sus grupos.'}
+              </Text>
+            </View>
+            <StatusBadge accent={instructorPalette.primary} label={`${filteredGroups.length} grupos`} soft={instructorPalette.mint} />
+          </View>
+          <View style={styles.stack}>
+            {filteredGroups.length ? visibleGroups.map((group, index) => (
+              <GroupCard
+                group={group}
+                key={`${group.id}-${group.fichaId || 'sin-ficha'}-${index}`}
+                learners={learners}
+                onEdit={() => editGroup(group)}
+                onRemoveLearner={(learnerId) => removeLearnerFromGroup(group.id, learnerId)}
+              />
+            )) : <EmptyCard text="Aún no hay grupos creados para esta ficha." />}
+          </View>
+        </View>
+      ) : null}
+
       <SectionHeading
         actionLabel={`${filteredProjects.length} registrados`}
         subtitle="Solo se muestran los proyectos de la ficha seleccionada."
         title="Proyectos"
       />
 
+      <SearchBox value={projectSearch} onChangeText={setProjectSearch} placeholder="Buscar proyecto por nombre, competencia, RAP o estado..." />
+
       <View style={styles.stack}>
-        {filteredProjects.length ? filteredProjects.map((project, index) => (
+        {filteredProjects.length ? visibleProjects.map((project, index) => (
           <ProjectCard
             key={`${project.id}-${project.fichaId || 'sin-ficha'}-${index}`}
             groups={groups}
             learners={learners}
-            project={project}
+            project={{ ...project, estado: selectedSheetAutomaticState }}
             selected={project.id === selectedProject?.id}
             onEdit={() => editProject(project)}
+            onOpenFile={() => openProjectFile(project)}
             onSelect={() => setSelectedProjectId(project.id)}
-            onStateChange={(state) => setProjectState(project, state)}
           />
         )) : <EmptyCard text="Aún no hay proyectos creados para esta ficha." />}
       </View>
 
+      {selectedTrackingProject ? (
+        <View style={styles.detailPanel}>
+          <View style={styles.detailPanelHeader}>
+            <View style={styles.copy}>
+              <Text style={styles.detailPanelTitle}>{selectedTrackingProject.titulo || 'Proyecto seleccionado'}</Text>
+              <Text style={styles.detailPanelText}>
+                {selectedTrackingProject.competenciaNombre || 'Sin competencia'} · {selectedTrackingProject.rapDescripcion || 'RAP pendiente'}
+              </Text>
+            </View>
+            <StatusBadge
+              accent={getStateTone(selectedTrackingProject.estado || 'Pendiente').accent}
+              label={selectedTrackingProject.estado || 'Pendiente'}
+              soft={getStateTone(selectedTrackingProject.estado || 'Pendiente').soft}
+            />
+          </View>
+          <View style={styles.progressDashboard}>
+            <ProgressMetric icon="chart-line" label="Avance" progress={Number(selectedTrackingProject.progreso || 0)} value={`${Number(selectedTrackingProject.progreso || 0)}%`} />
+            <ProgressMetric icon="clipboard-check-outline" label="Revisadas" progress={reviewProgress} value={`${reviewedCount}/${allProjectBitacoras.length}`} />
+            <ProgressMetric icon="check-decagram-outline" label="Aprobadas" progress={approvalProgress} value={`${approvalProgress}%`} />
+          </View>
+          <Text style={styles.subBlockTitle}>Aprendices y bitácoras</Text>
+          <LearnerTrackingFilter learners={trackingLearners} selectedLearnerId={selectedLearnerId} bitacoras={allProjectBitacoras} onSelect={setSelectedLearnerId} />
+          <BitacorasReviewPanel bitacoras={projectBitacoras} session={session} />
+        </View>
+      ) : null}
+
+      <View style={styles.hidden}>
       <SectionHeading
         actionLabel={`${filteredGroups.length} activos`}
         subtitle="Solo se muestran los grupos de la ficha seleccionada."
         title="Grupos creados"
       />
 
-      <View style={styles.stack}>
-        {filteredGroups.length ? filteredGroups.map((group, index) => (
+      <ActionButton
+        label={groupsVisible ? 'Ocultar grupos creados' : 'Ver grupos creados'}
+        onPress={() => setGroupsVisible((current) => !current)}
+      />
+
+      <View style={[styles.stack, !groupsVisible && styles.hidden]}>
+        {groupsVisible && filteredGroups.length ? visibleGroups.map((group, index) => (
           <GroupCard
             group={group}
             key={`${group.id}-${group.fichaId || 'sin-ficha'}-${index}`}
@@ -700,6 +987,8 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
         <EmptyCard text="Selecciona una ficha que tenga proyectos para consultar su seguimiento." />
       )}
 
+      </View>
+
       {saving ? (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator color={instructorPalette.primary} />
@@ -769,6 +1058,114 @@ function ProjectTrackingSelector({
   );
 }
 
+function PasanteTaskManager({
+  form,
+  onChange,
+  onDelete,
+  onEdit,
+  onSave,
+  onSaveObservation,
+  onValidate,
+  pasantes,
+  projects,
+  saving,
+  sheets,
+  tasks,
+}: {
+  form: typeof emptyTaskForm;
+  onChange: (form: typeof emptyTaskForm) => void;
+  onDelete: (task: PasanteTaskRecord) => void;
+  onEdit: (task: PasanteTaskRecord) => void;
+  onSave: () => void;
+  onSaveObservation: (task: PasanteTaskRecord, observacionInstructor: string) => void;
+  onValidate: (task: PasanteTaskRecord) => void;
+  pasantes: AcademicUser[];
+  projects: AcademicProject[];
+  saving: boolean;
+  sheets: AcademicSheet[];
+  tasks: PasanteTaskRecord[];
+}) {
+  const pendingTasks = tasks.filter((task) => task.estado !== 'Validada');
+  const orderedTasks = pendingTasks.concat(tasks.filter((task) => task.estado === 'Validada'));
+  const visibleTasks = orderedTasks.slice(0, 6);
+  const [createdTasksVisible, setCreatedTasksVisible] = useState(false);
+
+  return (
+    <View style={styles.formCard}>
+      <SectionHeading
+        actionLabel={`${tasks.length} asignadas`}
+        subtitle="Asigna tareas al pasante y revisa sus observaciones antes de validarlas."
+        title="Tareas para pasantes"
+      />
+      <View style={styles.formCardCompact}>
+        <OptionPicker
+          emptyLabel="Primero asigna pasantes a este instructor desde administración."
+          label="Pasante"
+          options={pasantes.map((pasante) => ({ label: pasante.nombre || pasante.correo || pasante.id, value: pasante.id }))}
+          value={form.pasanteUid}
+          onChange={(pasanteUid) => onChange({ ...form, pasanteUid })}
+        />
+        <OptionPicker
+          emptyLabel="Primero necesitas fichas asignadas."
+          label="Ficha relacionada"
+          options={sheets.map((sheet) => ({ label: `Ficha ${sheet.numero || sheet.id}`, value: sheet.id }))}
+          value={form.fichaId}
+          onChange={(fichaId) => onChange({ ...form, fichaId, proyectoId: '' })}
+        />
+        <OptionPicker
+          emptyLabel="Puedes guardar la tarea sin proyecto específico."
+          label="Proyecto opcional"
+          options={[
+            { label: 'General de la ficha', value: '' },
+            ...projects.map((project) => ({ label: project.titulo || project.id, value: project.id })),
+          ]}
+          value={form.proyectoId}
+          onChange={(proyectoId) => onChange({ ...form, proyectoId })}
+        />
+        <Field
+          label="Título de la tarea"
+          placeholder="Revisar evidencias de la semana"
+          value={form.titulo}
+          onChangeText={(titulo) => onChange({ ...form, titulo })}
+        />
+        <Field
+          label="Descripción"
+          multiline
+          placeholder="Indica qué debe consultar, observar o reportar el pasante."
+          value={form.descripcion}
+          onChangeText={(descripcion) => onChange({ ...form, descripcion })}
+        />
+        <View style={styles.actionRow}>
+          <ActionButton disabled={saving} label={form.id ? 'Actualizar tarea' : 'Asignar tarea'} onPress={onSave} tone="primary" />
+          {form.id ? (
+            <ActionButton label="Cancelar edición" onPress={() => onChange({ ...emptyTaskForm, fichaId: form.fichaId, pasanteUid: form.pasanteUid })} />
+          ) : null}
+        </View>
+      </View>
+
+      <ActionButton
+        label={createdTasksVisible ? 'Ocultar tareas creadas' : `Ver tareas creadas (${tasks.length})`}
+        onPress={() => setCreatedTasksVisible((current) => !current)}
+      />
+
+      {createdTasksVisible ? (
+      <View style={styles.stack}>
+        {tasks.length ? visibleTasks.map((task) => (
+          <PasanteTaskCard
+            key={task.id}
+            task={task}
+            onDelete={() => onDelete(task)}
+            onEdit={() => onEdit(task)}
+            onSaveObservation={(text) => onSaveObservation(task, text)}
+            onValidate={() => onValidate(task)}
+          />
+        )) : <EmptyCard text="Aún no hay tareas asignadas a pasantes." />}
+      </View>
+      ) : null}
+    </View>
+  );
+}
+
 function ProgressMetric({
   icon,
   label,
@@ -800,6 +1197,60 @@ function ProgressMetric({
   );
 }
 
+function PasanteTaskCard({
+  onDelete,
+  onEdit,
+  onSaveObservation,
+  onValidate,
+  task,
+}: {
+  onDelete: () => void;
+  onEdit: () => void;
+  onSaveObservation: (text: string) => void;
+  onValidate: () => void;
+  task: PasanteTaskRecord;
+}) {
+  const [observation, setObservation] = useState(task.observacionInstructor || '');
+
+  useEffect(() => {
+    setObservation(task.observacionInstructor || '');
+  }, [task.observacionInstructor]);
+
+  return (
+    <View style={styles.pasanteTaskCard}>
+      <View style={styles.header}>
+        <View style={[styles.iconWrap, { backgroundColor: getTaskTone(task.estado).soft }]}>
+          <MaterialCommunityIcons name="clipboard-check-outline" size={18} color={getTaskTone(task.estado).accent} />
+        </View>
+        <View style={styles.copy}>
+          <Text style={styles.title}>{task.titulo || 'Tarea sin título'}</Text>
+          <Text style={styles.subtitle}>
+            {task.pasanteNombre || 'Pasante'} · Ficha {task.fichaNumero || task.fichaId || 'general'}
+          </Text>
+        </View>
+        <StatusBadge accent={getTaskTone(task.estado).accent} label={task.estado || 'Pendiente'} soft={getTaskTone(task.estado).soft} />
+      </View>
+      {task.descripcion ? <Text style={styles.autoText}>{task.descripcion}</Text> : null}
+      {task.observacionPasante ? <Text style={styles.taskNote}>Pasante: {task.observacionPasante}</Text> : null}
+      <Field
+        label="Observación del instructor"
+        multiline
+        placeholder="Escribe una observación para esta tarea..."
+        value={observation}
+        onChangeText={setObservation}
+      />
+      <View style={styles.actionRow}>
+        <ActionButton label="Guardar observación" onPress={() => onSaveObservation(observation)} />
+        <ActionButton label="Editar" onPress={onEdit} />
+        <ActionButton label="Eliminar" onPress={onDelete} />
+        {task.estado === 'Hecho' && !task.validadaPorInstructor ? (
+          <ActionButton label="✓ Validar" onPress={onValidate} tone="primary" />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function LearnerTrackingFilter({
   bitacoras,
   learners,
@@ -811,8 +1262,17 @@ function LearnerTrackingFilter({
   onSelect: (learnerId: string) => void;
   selectedLearnerId: string;
 }) {
+  const [query, setQuery] = useState('');
+  const filteredLearners = learners.filter((learner) =>
+    `${learner.nombre || ''} ${learner.correo || ''}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase())
+  );
+
   return (
-    <View style={styles.learnerFilterWrap}>
+    <View style={styles.learnerFilterCard}>
+      <SearchBox value={query} onChangeText={setQuery} placeholder="Buscar aprendiz..." />
+      <View style={styles.learnerFilterWrap}>
       <Pressable
         onPress={() => onSelect('')}
         style={[styles.learnerFilter, !selectedLearnerId && styles.learnerFilterActive]}>
@@ -823,7 +1283,7 @@ function LearnerTrackingFilter({
           {bitacoras.length}
         </Text>
       </Pressable>
-      {learners.map((learner) => {
+      {filteredLearners.slice(0, 10).map((learner) => {
         const active = selectedLearnerId === learner.id;
         const count = bitacoras.filter((bitacora) => bitacora.aprendizUid === learner.id).length;
         return (
@@ -838,6 +1298,9 @@ function LearnerTrackingFilter({
           </Pressable>
         );
       })}
+      {!filteredLearners.length ? <Text style={styles.emptyText}>No hay aprendices con esa búsqueda.</Text> : null}
+      {filteredLearners.length > 10 ? <Text style={styles.listHint}>Mostrando 10 aprendices. Usa el buscador para filtrar mejor.</Text> : null}
+      </View>
     </View>
   );
 }
@@ -846,22 +1309,23 @@ function ProjectCard({
   groups,
   learners,
   onEdit,
+  onOpenFile,
   onSelect,
-  onStateChange,
   project,
   selected,
 }: {
   groups: WorkGroup[];
   learners: AcademicUser[];
   onEdit: () => void;
+  onOpenFile: () => void;
   onSelect: () => void;
-  onStateChange: (state: ProjectState) => void;
   project: AcademicProject;
   selected: boolean;
 }) {
   const assignedGroup = groups.find((group) => group.id === project.grupoId);
   const assignedLearners = learners.filter((learner) => (project.aprendizIds || []).includes(learner.id));
-  const stateTone = getStateTone(project.estado || 'Pendiente');
+  const automaticState = project.estado === 'Aprobado' ? 'Aprobado' : 'Pendiente';
+  const stateTone = getStateTone(automaticState);
 
   return (
     <Pressable onPress={onSelect} style={styles.projectCard}>
@@ -874,7 +1338,7 @@ function ProjectCard({
             <Text style={styles.title}>{project.titulo || 'Proyecto sin nombre'}</Text>
             <Text style={styles.subtitle}>Ficha {project.fichaNumero || project.fichaId || 'sin ficha'}</Text>
           </View>
-          <StatusBadge accent={stateTone.accent} label={project.estado || 'Pendiente'} soft={stateTone.soft} />
+          <StatusBadge accent={stateTone.accent} label={automaticState} soft={stateTone.soft} />
         </View>
 
         <ProgressBar accent={stateTone.accent} progress={Number(project.progreso || 0)} soft="#EFF3FA" />
@@ -883,7 +1347,11 @@ function ProjectCard({
           <IconLabel icon="book-check-outline" text={project.competenciaNombre || 'Competencia pendiente'} />
           <IconLabel icon="format-list-checks" text={project.rapDescripcion || 'RAP pendiente'} />
           {project.archivoNombre ? (
-            <IconLabel icon="file-document-outline" text={`Archivo: ${project.archivoNombre}`} />
+            <Pressable onPress={onOpenFile} style={styles.fileLink}>
+              <MaterialCommunityIcons name="file-document-outline" size={16} color={instructorPalette.primary} />
+              <Text numberOfLines={1} style={styles.fileLinkText}>{project.archivoNombre}</Text>
+              <MaterialCommunityIcons name="open-in-new" size={14} color={instructorPalette.primary} />
+            </Pressable>
           ) : null}
           <IconLabel
             icon={project.asignacionTipo === 'grupo' ? 'account-group-outline' : 'account-multiple-outline'}
@@ -894,11 +1362,7 @@ function ProjectCard({
         </View>
 
         <View style={styles.stateRow}>
-          {projectStates.map((state) => (
-            <Pressable key={state} onPress={() => onStateChange(state)} style={styles.stateButton}>
-              <Text style={styles.stateButtonText}>{state}</Text>
-            </Pressable>
-          ))}
+          <Text style={styles.autoStateText}>La aprobación del proyecto se calcula automáticamente al cierre del trimestre.</Text>
           <Pressable onPress={onEdit} style={[styles.stateButton, styles.editButton]}>
             <Text style={[styles.stateButtonText, styles.editButtonText]}>Editar</Text>
           </Pressable>
@@ -1027,6 +1491,70 @@ function Field({
 }
 
 function OptionPicker({
+  emptyLabel,
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  emptyLabel: string;
+  label: string;
+  onChange: (value: string) => void;
+  options: { label: string; value: string }[];
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const filteredOptions = useMemo(
+    () => options.filter((option) => option.label.toLowerCase().includes(query.trim().toLowerCase())),
+    [options, query]
+  );
+  const selectedOption = options.find((option) => option.value === value);
+
+  if (!options.length) {
+    return emptyLabel ? <EmptyCard text={emptyLabel} compact /> : null;
+  }
+
+  return (
+    <View style={styles.fieldBlock}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <Pressable onPress={() => setOpen((current) => !current)} style={styles.selectorTrigger}>
+        <Text numberOfLines={1} style={styles.selectorTriggerText}>
+          {selectedOption?.label || 'Selecciona una opción'}
+        </Text>
+        <MaterialCommunityIcons name={open ? 'chevron-up' : 'chevron-down'} size={12} color={instructorPalette.secondary} />
+      </Pressable>
+      {open ? (
+        <View style={styles.selectorDropdown}>
+          <SearchBox value={query} onChangeText={setQuery} placeholder={`Buscar ${label.toLowerCase()}...`} />
+          <View style={styles.selectorOptions}>
+            {filteredOptions.length ? filteredOptions.map((option, index) => {
+              const active = option.value === value;
+
+              return (
+                <Pressable
+                  key={`${option.value}-${option.label}-${index}`}
+                  onPress={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                    setQuery('');
+                  }}
+                  style={[styles.selectorOption, active && styles.selectorOptionActive]}>
+                  {active ? <MaterialCommunityIcons name="check-circle" size={20} color={instructorPalette.primary} /> : null}
+                  <Text numberOfLines={2} style={[styles.selectorOptionText, active && styles.selectorOptionTextActive]}>
+                    {`${index + 1}. ${option.label}`}
+                  </Text>
+                </Pressable>
+              );
+            }) : <Text style={styles.emptyText}>No hay resultados para esa búsqueda.</Text>}
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function LegacyOptionPicker({
   emptyLabel,
   label,
   onChange,
@@ -1267,6 +1795,22 @@ function EmptyCard({ compact = false, text }: { compact?: boolean; text: string 
   );
 }
 
+function isWithinLastWeek(fechaFin?: string) {
+  if (!fechaFin) {
+    return false;
+  }
+
+  const end = new Date(`${fechaFin}T23:59:59`);
+  if (Number.isNaN(end.getTime())) {
+    return false;
+  }
+
+  const now = new Date();
+  const diffMs = end.getTime() - now.getTime();
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+  return diffMs >= 0 && diffMs <= sevenDaysMs;
+}
+
 function getStateTone(state: string) {
   if (state === 'Aprobado') {
     return { accent: instructorPalette.primary, soft: instructorPalette.mint };
@@ -1283,21 +1827,33 @@ function getStateTone(state: string) {
   return { accent: instructorPalette.textMuted, soft: '#EFF3FA' };
 }
 
+function getTaskTone(state?: string) {
+  if (state === 'Validada') {
+    return { accent: instructorPalette.primary, soft: instructorPalette.mint };
+  }
+
+  if (state === 'Hecho') {
+    return { accent: instructorPalette.secondary, soft: instructorPalette.softGreen };
+  }
+
+  return { accent: instructorPalette.textMuted, soft: '#EFF3FA' };
+}
+
 const styles = StyleSheet.create({
   heroCard: {
-    backgroundColor: 'transparent',
-    gap: 8,
-    marginBottom: -8,
+    backgroundColor: instructorPalette.surface,
+    gap: 15,
     marginHorizontal: -30,
-    paddingHorizontal: 37,
-    paddingVertical: 20,
+    paddingBottom: 22,
+    paddingHorizontal: 31,
+    paddingTop: 28,
   },
   heroLabel: {
     color: instructorPalette.primary,
     fontFamily: 'PoppinsMedium',
     fontSize: 12,
     letterSpacing: 0.6,
-    marginBottom: 6,
+    marginBottom: -5,
     textTransform: 'uppercase',
   },
   heroTitle: {
@@ -1324,6 +1880,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 8,
   },
+  formCardCompact: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 26,
+    gap: 12,
+    padding: 10,
+    marginTop: 3,
+  },
   closeButton: {
     alignItems: 'center',
     alignSelf: 'flex-end',
@@ -1336,8 +1899,34 @@ const styles = StyleSheet.create({
   },
   quickActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+  },
+  tasksPanel: {
+    backgroundColor: '#F7FBF9',
+    borderColor: instructorPalette.border,
+    borderRadius: 28,
+    borderWidth: 1,
+    gap: 14,
+    padding: 14,
+  },
+  pasanteTaskCard: {
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 11,
+    padding: 14,
+  },
+  taskNote: {
+    backgroundColor: instructorPalette.surfaceMuted,
+    borderRadius: 14,
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 17,
+    padding: 10,
   },
   fieldBlock: {
     gap: 8,
@@ -1365,6 +1954,64 @@ const styles = StyleSheet.create({
   fieldInputActive: {
     backgroundColor: '#FFFFFF',
     borderColor: instructorPalette.secondary,
+  },
+  selectorTrigger: {
+    alignItems: 'center',
+    backgroundColor: '#FCFFFE',
+    borderColor: instructorPalette.border,
+    borderRadius: 22,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+    minHeight: 58,
+    paddingHorizontal: 15,
+    paddingVertical: 5,
+  },
+  selectorTriggerText: {
+    color: instructorPalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  selectorDropdown: {
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 12,
+    padding: 12,
+  },
+  selectorOptions: {
+    gap: 9,
+    maxHeight: 260,
+  },
+  selectorOption: {
+    alignItems: 'center',
+    backgroundColor: '#FAFCFB',
+    borderColor: instructorPalette.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 9,
+    minHeight: 52,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  selectorOptionActive: {
+    backgroundColor: '#FFFFFF',
+    borderColor: instructorPalette.primary,
+    borderWidth: 2,
+  },
+  selectorOptionText: {
+    color: instructorPalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  selectorOptionTextActive: {
+    color: instructorPalette.primary,
   },
   segmented: {
     backgroundColor: instructorPalette.surfaceMuted,
@@ -1394,6 +2041,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    maxHeight: 230,
   },
   sheetFilterCard: {
     backgroundColor: instructorPalette.surface,
@@ -1450,6 +2098,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     padding: 0,
   },
+  listHint: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
   autoBox: {
     backgroundColor: instructorPalette.mint,
     borderColor: instructorPalette.border,
@@ -1487,6 +2142,23 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
     lineHeight: 18,
+  },
+  fileLink: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: instructorPalette.mint,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 7,
+    maxWidth: '100%',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  fileLinkText: {
+    color: instructorPalette.primary,
+    flexShrink: 1,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
   },
   optionChip: {
     backgroundColor: instructorPalette.surfaceMuted,
@@ -1539,14 +2211,17 @@ const styles = StyleSheet.create({
   },
 
   actionButtonOpen: {
-    minHeight: 56,
-    borderRadius: 18,
+    minHeight: 54,
+    borderRadius: 22,
 
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingHorizontal: 16,
+    flexBasis: '47%',
+    flexGrow: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
 
     elevation: 2,
     shadowOffset: { width: 0, height: 3 },
@@ -1558,9 +2233,9 @@ const styles = StyleSheet.create({
     shadowColor: instructorPalette.primary,
   },
   actionButtonOpenSecondary: {
-    backgroundColor: instructorPalette.lavanderText,
-    borderWidth: 1.5,
-    borderColor: instructorPalette.lavanderText,
+    backgroundColor: '#5F9C8F',
+    borderWidth: 1,
+    borderColor: '#5F9C8F',
     shadowColor: instructorPalette.primary,
   },
   actionButtonOpenPressed: {
@@ -1584,13 +2259,50 @@ const styles = StyleSheet.create({
   actionButtonOpenText: {
     color: instructorPalette.background,
     fontFamily: 'PoppinsSemiBold',
-    fontSize: 12.5,
+    fontSize: 12,
+    flexShrink: 1,
+    textAlign: 'center',
   },
   actionButtonOpenTextPrimary: {
     color: '#FFFFFF',
   },
   stack: {
     gap: 12,
+  },
+  hidden: {
+    display: 'none',
+  },
+  detailPanel: {
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 26,
+    borderWidth: 1,
+    gap: 14,
+    padding: 22,
+  },
+  detailPanelHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+  },
+  detailPanelTitle: {
+    color: instructorPalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 24,
+  },
+  detailPanelText: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 18,
+    width: '130%',
+    marginTop: 4,
+  },
+  subBlockTitle: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
   },
   projectCard: {
     borderRadius: 24,
@@ -1669,6 +2381,13 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsSemiBold',
     fontSize: 10,
   },
+  autoStateText: {
+    color: instructorPalette.textMuted,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+    lineHeight: 15,
+  },
   editButton: {
     backgroundColor: instructorPalette.mint,
     borderRadius: 999,
@@ -1703,6 +2422,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     flexDirection: 'row',
     gap: 10,
+    marginHorizontal: 2,
     padding: 14,
   },
   feedbackBoxError: {
@@ -1712,6 +2432,35 @@ const styles = StyleSheet.create({
     color: instructorPalette.text,
     flex: 1,
     fontFamily: 'PoppinsMedium',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  groupsPanel: {
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 26,
+    borderWidth: 1,
+    gap: 14,
+    padding: 16,
+    shadowColor: instructorPalette.shadow,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+  },
+  panelHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+  },
+  panelTitle: {
+    color: instructorPalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 16,
+  },
+  panelText: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 18,
   },
@@ -1837,6 +2586,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  learnerFilterCard: {
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 12,
+    padding: 14,
   },
   learnerFilter: {
     alignItems: 'center',

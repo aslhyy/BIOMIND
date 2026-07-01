@@ -1,6 +1,7 @@
 import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import {
   instructorAlerts,
@@ -15,6 +16,39 @@ import {
 } from '../data';
 import { instructorPalette } from '../theme';
 import { IconLabel, ProgressBar, SectionHeading, SectionTitle, StatusBadge } from './InstructorUI';
+// @ts-ignore
+import { escucharContextoAcademicoUsuario, escucharProyectos } from '@/services/academic';
+// @ts-ignore
+import { escucharBitacoras } from '@/services/bitacoras';
+
+type RealSheet = {
+  id: string;
+  numero?: string;
+  programaNombre?: string;
+  trimestreActual?: string;
+};
+
+type RealLearner = {
+  id: string;
+  fichaId?: string | null;
+};
+
+type RealProject = {
+  id: string;
+  titulo?: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  competenciaNombre?: string;
+  estado?: string;
+  progreso?: number;
+  instructorUid?: string;
+};
+
+type RealBitacora = {
+  id: string;
+  proyectoId?: string;
+  estado?: string;
+};
 
 export function InstructorHomeTab({
   session,
@@ -23,6 +57,118 @@ export function InstructorHomeTab({
   session: AuthenticatedSession;
   onOpenChatChannel: (channel: 'admin' | 'pasante') => void;
 }) {
+  const [realSheets, setRealSheets] = useState<RealSheet[]>([]);
+  const [realLearners, setRealLearners] = useState<RealLearner[]>([]);
+  const [realProjects, setRealProjects] = useState<RealProject[]>([]);
+  const [realBitacoras, setRealBitacoras] = useState<RealBitacora[]>([]);
+  const [realError, setRealError] = useState('');
+
+  useEffect(() => {
+    const handleError = (error: any) =>
+      setRealError(error?.message || 'No pudimos cargar el resumen real.');
+    const unsubscribeContext = escucharContextoAcademicoUsuario(
+      session,
+      (context: any) => {
+        setRealSheets(context.fichas || []);
+        setRealLearners(context.aprendices || []);
+      },
+      handleError
+    );
+    const unsubscribeProjects = escucharProyectos(
+      (items: RealProject[]) => setRealProjects(items.filter((project) => project.instructorUid === session.uid)),
+      handleError
+    );
+    const unsubscribeBitacoras = escucharBitacoras(setRealBitacoras, handleError);
+
+    return () => {
+      unsubscribeContext?.();
+      unsubscribeProjects?.();
+      unsubscribeBitacoras?.();
+    };
+  }, [session]);
+
+  const realProjectIds = useMemo(() => new Set(realProjects.map((project) => project.id)), [realProjects]);
+  const instructorBitacoras = useMemo(
+    () => realBitacoras.filter((bitacora) => realProjectIds.has(bitacora.proyectoId || '')),
+    [realBitacoras, realProjectIds]
+  );
+  const pendingBitacoras = instructorBitacoras.filter((bitacora) =>
+    !['Aprobada', 'Rechazada', 'Correccion'].includes(bitacora.estado || '')
+  ).length;
+  const approvedProjects = realProjects.filter((project) => project.estado === 'Aprobado').length;
+  const averageProgress = realProjects.length
+    ? Math.round(realProjects.reduce((sum, project) => sum + Number(project.progreso || 0), 0) / realProjects.length)
+    : 0;
+  const realMetrics: InstructorMetric[] = realSheets.length || realProjects.length || instructorBitacoras.length
+    ? [
+      {
+        id: 'real-sheets',
+        label: 'Fichas asignadas',
+        value: String(realSheets.length),
+        caption: `${realLearners.length} aprendices vinculados`,
+        icon: 'school-outline',
+        accent: instructorPalette.primary,
+        soft: instructorPalette.mint,
+      },
+      {
+        id: 'real-projects',
+        label: 'Proyectos activos',
+        value: String(realProjects.length),
+        caption: `${approvedProjects} aprobados`,
+        icon: 'briefcase-check-outline',
+        accent: instructorPalette.green,
+        soft: instructorPalette.softGreen,
+      },
+      {
+        id: 'real-bitacoras',
+        label: 'Bitácoras pendientes',
+        value: String(pendingBitacoras),
+        caption: `${averageProgress}% avance promedio`,
+        icon: 'notebook-check-outline',
+        accent: '#EAA189',
+        soft: instructorPalette.peachSurface,
+      },
+    ]
+    : instructorMetrics;
+  const realSheetOverviews = realSheets.length
+    ? realSheets.map((sheet) => {
+      const sheetProjects = realProjects.filter((project) => project.fichaId === sheet.id);
+      const sheetLearners = realLearners.filter((learner) => learner.fichaId === sheet.id);
+      const progress = sheetProjects.length
+        ? Math.round(sheetProjects.reduce((sum, project) => sum + Number(project.progreso || 0), 0) / sheetProjects.length)
+        : 0;
+
+      return {
+        id: sheet.id,
+        code: sheet.numero || sheet.id,
+        program: sheet.programaNombre || 'Sin programa',
+        trimester: sheet.trimestreActual || 'Sin trimestre',
+        learners: sheetLearners.length,
+        activeProjects: sheetProjects.length,
+        competencies: Array.from(new Set(sheetProjects.map((project) => project.competenciaNombre).filter(Boolean))),
+        progress,
+      };
+    })
+    : sheetOverviews;
+  const realProjectSnapshots: ProjectSnapshot[] = realProjects.length
+    ? realProjects.slice(0, 4).map((project) => {
+      const logs = instructorBitacoras.filter((bitacora) => bitacora.proyectoId === project.id);
+
+      return {
+        id: project.id,
+        title: project.titulo || 'Proyecto sin nombre',
+        species: project.fichaNumero ? `Ficha ${project.fichaNumero}` : 'Sin ficha',
+        stage: project.competenciaNombre || project.estado || 'Seguimiento académico',
+        progress: Number(project.progreso || 0),
+        contamination: logs.length ? `${logs.length} bitácoras registradas` : 'Sin bitácoras',
+        photos: logs.length,
+        inventory: project.estado || 'Pendiente',
+        icon: 'sprout-outline',
+        accent: project.estado === 'Aprobado' ? instructorPalette.primary : instructorPalette.secondary,
+        soft: project.estado === 'Aprobado' ? instructorPalette.mint : instructorPalette.softGreen,
+      };
+    })
+    : projectSnapshots;
   const validationItems = [
     {
       id: 'rap1',
@@ -76,20 +222,65 @@ export function InstructorHomeTab({
   return (
     <>
       <View style={styles.startCard}>
-        <SectionTitle title="Resumen del laboratorio" />
+        <View style={styles.dashboardHeroTop}>
+          <View style={styles.dashboardIcon}>
+            <MaterialCommunityIcons name="leaf-circle-outline" size={28} color="#FFFFFF" />
+          </View>
+          <View style={styles.dashboardCopy}>
+            <Text style={styles.dashboardEyebrow}>Panel del instructor</Text>
+            <Text style={styles.dashboardTitle}>Seguimiento académico</Text>
+            <Text style={styles.dashboardText}>Fichas, proyectos y bitácoras listos para revisar.</Text>
+          </View>
+        </View>
 
         <View style={styles.metricsRow}>
-          {instructorMetrics.map((metric) => (
+          {realMetrics.map((metric) => (
             <MetricCard key={metric.id} metric={metric} />
+          ))}
+        </View>
+        {realError ? <Text style={styles.errorText}>{realError}</Text> : null}
+      </View>
+
+      <View style={styles.compactPanel}>
+        <SectionHeading
+          actionLabel={`${realSheetOverviews.length} fichas`}
+          subtitle="Cada ficha muestra su trimestre, aprendices y avance."
+          title="Fichas a cargo"
+        />
+        <View style={styles.sheetGrid}>
+          {realSheetOverviews.slice(0, 4).map((sheet) => (
+            <View key={sheet.id} style={styles.sheetCardCompact}>
+              <Text style={styles.sheetCode}>Ficha {sheet.code}</Text>
+              <Text style={styles.sheetMeta}>{sheet.program}</Text>
+              <Text style={styles.sheetTrimester}>{sheet.trimester}</Text>
+              <ProgressBar accent={instructorPalette.primary} progress={sheet.progress} soft="#EAF6F3" />
+              <View style={styles.compactMetaRow}>
+                <IconLabel icon="account-multiple-outline" text={`${sheet.learners} aprendices`} />
+                <IconLabel icon="briefcase-outline" text={`${sheet.activeProjects} proyectos`} />
+              </View>
+            </View>
           ))}
         </View>
       </View>
 
+      <View style={styles.compactPanel}>
+        <SectionHeading
+          actionLabel={`${realProjects.length} total`}
+          subtitle="Resumen rápido; el detalle está en Gestión académica."
+          title="Proyectos recientes"
+        />
+        <View style={styles.stack}>
+          {realProjectSnapshots.slice(0, 3).map((project) => (
+            <ProjectRow key={project.id} project={project} />
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.dashboardHidden}>
       <CurrentTrimesterSummary
         colors={{
           accent: instructorPalette.primary,
           background: instructorPalette.surface,
-          border: instructorPalette.border,
           iconBackground: instructorPalette.mint,
           muted: instructorPalette.textMuted,
           text: instructorPalette.text,
@@ -103,7 +294,7 @@ export function InstructorHomeTab({
         title="Vista general de fichas"
       />
       <View style={styles.stack}>
-        {sheetOverviews.map((sheet) => (
+        {realSheetOverviews.map((sheet) => (
           <View key={sheet.id} style={styles.sheetCard}>
             <View style={styles.sheetHeader}>
               <View>
@@ -129,7 +320,7 @@ export function InstructorHomeTab({
         title="Proyectos activos"
       />
       <View style={styles.stack}>
-        {projectSnapshots.map((project) => (
+        {realProjectSnapshots.map((project) => (
           <ProjectRow key={project.id} project={project} />
         ))}
       </View>
@@ -215,6 +406,7 @@ export function InstructorHomeTab({
           <AlertRow key={alert.id} alert={alert} />
         ))}
       </View>
+      </View>
     </>
   );
 }
@@ -223,9 +415,9 @@ function MetricCard({ metric }: { metric: InstructorMetric }) {
   return (
     <View style={[styles.metricCard, { backgroundColor: metric.soft }]}>
       <View style={[styles.metricIcon, { backgroundColor: metric.accent }]}>
-        <MaterialCommunityIcons name={metric.icon} size={18} color={instructorPalette.surface} />
+        <MaterialCommunityIcons name={metric.icon} size={18} color={instructorPalette.surfaceHover} />
       </View>
-      <Text style={[styles.metricValue, metric.valueStyle]}>{metric.value}</Text>
+      <Text style={[styles.metricValue, { color: metric.accent }, metric.valueStyle]}>{metric.value}</Text>
       <Text style={styles.metricLabel}>{metric.label}</Text>
       <Text style={styles.metricCaption}>{metric.caption}</Text>
     </View>
@@ -290,10 +482,47 @@ function AlertRow({ alert }: { alert: AlertItem }) {
 const styles = StyleSheet.create({
   startCard: {
     backgroundColor: instructorPalette.surface,
+    gap: 15,
     marginHorizontal: -30,
-    paddingVertical: 20,
-    paddingHorizontal: 22,
-    gap: 16,
+    paddingBottom: 22,
+    paddingHorizontal: 31,
+    paddingTop: 28,
+  },
+  dashboardHeroTop: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 13,
+  },
+  dashboardIcon: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.primary,
+    borderRadius: 24,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  dashboardCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  dashboardEyebrow: {
+    color: instructorPalette.secondary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  dashboardTitle: {
+    color: instructorPalette.dark,
+    fontFamily: 'SulphurPointBold',
+    fontSize: 27,
+    lineHeight: 28,
+  },
+  dashboardText: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 18,
   },
   metricsRow: {
     flexDirection: 'row',
@@ -335,9 +564,66 @@ const styles = StyleSheet.create({
   stack: {
     gap: 12,
   },
+  dashboardHidden: {
+    display: 'none',
+  },
+  compactPanel: {
+    backgroundColor: 'transparent',
+    gap: 14,
+    paddingVertical: 2,
+  },
+  compactHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+  },
+  compactHeaderCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  compactTitle: {
+    color: instructorPalette.primary,
+    fontFamily: 'SulphurPointBold',
+    fontSize: 25,
+    lineHeight: 27,
+  },
+  compactSubtitle: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  sheetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  sheetCardCompact: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 28,
+    elevation: 3,
+    flexBasis: '47%',
+    flexGrow: 1,
+    gap: 10,
+    minWidth: 150,
+    padding: 25,
+    shadowColor: instructorPalette.shadow,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+  },
+  sheetTrimester: {
+    color: instructorPalette.secondary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  compactMetaRow: {
+    gap: 7,
+  },
   sheetCard: {
     backgroundColor: instructorPalette.surface,
-    borderRadius: 24,
+    borderRadius: 34,
     padding: 16,
     shadowColor: instructorPalette.shadow,
     shadowOpacity: 0.08,
@@ -360,15 +646,15 @@ const styles = StyleSheet.create({
   sheetMeta: {
     color: instructorPalette.textMuted,
     fontFamily: 'PoppinsRegular',
-    fontSize: 12,
+    fontSize: 11,
   },
   sheetFooter: {
     gap: 8,
   },
   projectRow: {
     backgroundColor: instructorPalette.surface,
-    borderRadius: 24,
-    padding: 16,
+    borderRadius: 26,
+    padding: 20,
     shadowColor: instructorPalette.shadow,
     shadowOpacity: 0.08,
     shadowRadius: 8,
@@ -561,5 +847,11 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 18,
+  },
+  errorText: {
+    color: '#C97B63',
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
+    lineHeight: 16,
   },
 });

@@ -2,6 +2,7 @@ export const instructorPalette = {
   background: '#f4f4f4',
   contentProfile: 'transparent',
   surface: '#FFFFFF',
+  surfaceHover: '#f4fbf9b8',
   surfaceMuted: '#F4FBF9',
   text: '#4B5B57',
   textMuted: '#8AA69C',

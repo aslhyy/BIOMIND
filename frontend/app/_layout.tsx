@@ -18,7 +18,7 @@ export default function RootLayout() {
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="dashboard/dashboard" options={{ headerShown: false }} />
       </Stack>
-      <StatusBar style="auto" />
+      <StatusBar backgroundColor="transparent" style="dark" translucent />
     </SafeAreaProvider>
   );
 }

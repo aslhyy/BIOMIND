@@ -1,6 +1,5 @@
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
-import { RealAcademicContext } from '@/features/workspace/components/RealAcademicContext';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
 import type {
@@ -9,7 +8,6 @@ import type {
 } from '@/features/workspace/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
-import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -55,7 +53,6 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
       <View style={styles.screen}>
         <ScrollView
           showsVerticalScrollIndicator={false}
@@ -63,16 +60,13 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
           {activeTab === 'inicio' && (
-            <>
-              <InstructorHomeTab
-                session={session}
-                onOpenChatChannel={(channel) => {
-                  setAssistantChatChannel(channel);
-                  setActiveTab('asistente');
-                }}
-              />
-              <RealAcademicContext session={session} />
-            </>
+            <InstructorHomeTab
+              session={session}
+              onOpenChatChannel={(channel) => {
+                setAssistantChatChannel(channel);
+                setActiveTab('asistente');
+              }}
+            />
           )}
           {activeTab === 'aprendices' && (
             <InstructorProjectsTab session={session} />

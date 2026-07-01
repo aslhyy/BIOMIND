@@ -1,9 +1,9 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
-import { Image, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Image, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 // @ts-ignore
-import { revisarBitacora } from '@/services/bitacoras';
+import { observarBitacora, revisarBitacora } from '@/services/bitacoras';
 
 type Evidence = {
   nombre?: string;
@@ -35,6 +35,7 @@ type Bitacora = {
 
 type Props = {
   bitacoras: Bitacora[];
+  mode?: 'review' | 'observation';
   session: AuthenticatedSession;
 };
 
@@ -46,7 +47,7 @@ const statusColors: Record<string, { background: string; color: string; label: s
   Borrador: { background: '#F1F3F4', color: '#5F6368', label: 'Borrador' },
 };
 
-export function BitacorasReviewPanel({ bitacoras, session }: Props) {
+export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Props) {
   const [selectedId, setSelectedId] = useState('');
   const [observacion, setObservacion] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -73,7 +74,7 @@ export function BitacorasReviewPanel({ bitacoras, session }: Props) {
     setFeedback('');
   };
 
-  const handleReview = async (estado: 'Aprobada' | 'Rechazada' | 'Correccion') => {
+  const saveReview = async (estado: 'Aprobada' | 'Rechazada' | 'Correccion') => {
     if (!selectedBitacora?.id) {
       setFeedback('Selecciona una bitácora para revisar.');
       return;
@@ -99,6 +100,53 @@ export function BitacorasReviewPanel({ bitacoras, session }: Props) {
     } catch (error) {
       const typedError = error as { message?: string };
       setFeedback(typedError.message || 'No pudimos guardar la revisión.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReview = (estado: 'Aprobada' | 'Rechazada' | 'Correccion') => {
+    const actionLabel = estado === 'Aprobada'
+      ? 'aprobar'
+      : estado === 'Correccion'
+        ? 'solicitar corrección para'
+        : 'desaprobar';
+
+    Alert.alert(
+      'Confirmar revisión',
+      `¿Seguro que deseas ${actionLabel} esta bitácora?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => saveReview(estado) },
+      ]
+    );
+  };
+
+  const saveObservation = async () => {
+    if (!selectedBitacora?.id) {
+      setFeedback('Selecciona una bitácora para observar.');
+      return;
+    }
+
+    if (!observacion.trim()) {
+      setFeedback('Escribe una observación antes de guardar.');
+      return;
+    }
+
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      await observarBitacora(selectedBitacora.id, {
+        observacion,
+        revisadoPorUid: session.uid,
+        revisadoPorNombre: session.name,
+        revisadoPorRol: session.role,
+      });
+      setFeedback('Observación guardada correctamente.');
+    } catch (error) {
+      const typedError = error as { message?: string };
+      setFeedback(typedError.message || 'No pudimos guardar la observación.');
     } finally {
       setSaving(false);
     }
@@ -178,9 +226,11 @@ export function BitacorasReviewPanel({ bitacoras, session }: Props) {
         ) : null}
 
         <View style={styles.reviewBlock}>
-          <Text style={styles.reviewTitle}>Revisión del instructor</Text>
+          <Text style={styles.reviewTitle}>{mode === 'observation' ? 'Observación del pasante' : 'Revisión del instructor'}</Text>
           <Text style={styles.reviewText}>
-            Registra una observación clara antes de aprobar, desaprobar o solicitar corrección.
+            {mode === 'observation'
+              ? 'Registra una observación técnica. El estado de aprobación queda a cargo del instructor.'
+              : 'Registra una observación clara antes de aprobar, desaprobar o solicitar corrección.'}
           </Text>
           <TextInput
             multiline
@@ -190,29 +240,41 @@ export function BitacorasReviewPanel({ bitacoras, session }: Props) {
             style={styles.textArea}
             value={observacion}
           />
-          <View style={styles.actions}>
-            <ReviewButton
-              color="#117C72"
-              disabled={saving}
-              icon="check-circle-outline"
-              label="Aprobar"
-              onPress={() => handleReview('Aprobada')}
-            />
-            <ReviewButton
-              color="#D9941E"
-              disabled={saving}
-              icon="pencil-circle-outline"
-              label="Solicitar corrección"
-              onPress={() => handleReview('Correccion')}
-            />
-            <ReviewButton
-              color="#C45C43"
-              disabled={saving}
-              icon="close-circle-outline"
-              label="Desaprobar"
-              onPress={() => handleReview('Rechazada')}
-            />
-          </View>
+          {mode === 'observation' ? (
+            <View style={styles.actions}>
+              <ReviewButton
+                color="#117C72"
+                disabled={saving}
+                icon="pencil-circle-outline"
+                label="Guardar observación"
+                onPress={saveObservation}
+              />
+            </View>
+          ) : (
+            <View style={styles.actions}>
+              <ReviewButton
+                color="#91b483"
+                disabled={saving}
+                icon="check-circle-outline"
+                label="Aprobar"
+                onPress={() => handleReview('Aprobada')}
+              />
+              <ReviewButton
+                color="#eccc90"
+                disabled={saving}
+                icon="pencil-circle-outline"
+                label="Solicitar corrección"
+                onPress={() => handleReview('Correccion')}
+              />
+              <ReviewButton
+                color="#f5a38b"
+                disabled={saving}
+                icon="close-circle-outline"
+                label="Desaprobar"
+                onPress={() => handleReview('Rechazada')}
+              />
+            </View>
+          )}
           {feedback ? <Text style={styles.feedback}>{feedback}</Text> : null}
         </View>
       </View>

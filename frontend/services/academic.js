@@ -51,6 +51,17 @@ function mapSnapshot(snapshot) {
   }));
 }
 
+function getMillis(value) {
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
+
+function sortByCreated(items) {
+  return [...items].sort((a, b) => getMillis(b.creadoEn) - getMillis(a.creadoEn));
+}
+
 function isActive(record) {
   return record.activo !== false && record.estado !== 'Inactivo' && record.estado !== 'Inactiva';
 }
@@ -171,7 +182,9 @@ export function escucharContextoAcademicoUsuario(session, onData, onError) {
       }
 
       if (role === 'pasante') {
-        return sessionMatchesSheet(session, ficha) || (ficha.pasantesUids || []).includes(session?.uid);
+        return sessionMatchesSheet(session, ficha)
+          || (ficha.pasantesUids || []).includes(session?.uid)
+          || (session?.instructorUid && (ficha.instructorUids || []).includes(session.instructorUid));
       }
 
       return false;
@@ -525,8 +538,8 @@ export function subscribeInstructorFichas(instructorUid, onData, onError) {
   }
 
   return onSnapshot(
-    query(collection(db, FICHAS_COLLECTION), where('instructorUids', 'array-contains', instructorUid), orderBy('creadoEn', 'desc')),
-    (snapshot) => onData(mapSnapshot(snapshot)),
+    query(collection(db, FICHAS_COLLECTION), where('instructorUids', 'array-contains', instructorUid)),
+    (snapshot) => onData(sortByCreated(mapSnapshot(snapshot))),
     onError
   );
 }
@@ -671,8 +684,8 @@ export function subscribePasanteFichas(pasanteUid, onData, onError) {
   }
 
   return onSnapshot(
-    query(collection(db, FICHAS_COLLECTION), where('pasantesUids', 'array-contains', pasanteUid), orderBy('creadoEn', 'desc')),
-    (snapshot) => onData(mapSnapshot(snapshot)),
+    query(collection(db, FICHAS_COLLECTION), where('pasantesUids', 'array-contains', pasanteUid)),
+    (snapshot) => onData(sortByCreated(mapSnapshot(snapshot))),
     onError
   );
 }

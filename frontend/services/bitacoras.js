@@ -171,3 +171,19 @@ export async function revisarBitacora(bitacoraId, revision) {
         actualizadoEn: now(),
     });
 }
+
+export async function observarBitacora(bitacoraId, revision) {
+    const observacion = cleanText(revision.observacion);
+
+    if (!observacion) {
+        throw new Error('Registra una observación para el aprendiz.');
+    }
+
+    await updateDoc(doc(db, BITACORAS_COLLECTION, bitacoraId), {
+        observacion,
+        revisadoPorUid: revision.revisadoPorUid,
+        revisadoPorNombre: revision.revisadoPorNombre,
+        revisadoPorRol: revision.revisadoPorRol,
+        actualizadoEn: now(),
+    });
+}
