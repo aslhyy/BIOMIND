@@ -40,8 +40,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import type { ComponentProps, ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Children, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type AdminTab = 'inicio' | 'usuarios' | 'academico' | 'trimestres' | 'perfil';
@@ -49,40 +49,39 @@ type AdminIconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
 type AcademicSectionId =
   | 'programas'
   | 'fichas'
-  | 'usuarios-fichas'
   | 'pasantes'
   | 'resumen'
   | 'competencias'
   | 'asignar-competencia';
 
 const palette = {
-  background: '#F4F4F4',
-  shadow: '#E7C6B8',
-  border: '#EFE7DC',
+  background: '#F5F3EE',
+  shadow: '#D8C8AB',
+  border: '#ECE3D0',
   dark: '#2F4736',
-  ink: '#5D5A51',
-  muted: '#A1A197',
-  primary: '#E9A85F',
-  secondary: '#F4C47F',
-  soft: '#FFF4E6',
+  ink: '#5B554A',
+  muted: '#9A9386',
+  primary: '#B38B4D',
+  secondary: '#D5BB87',
+  soft: '#FFF9EF',
   surface: '#FFFFFF',
-  warning: '#F08A6A',
-  blue: '#7FC7B1',
-  violet: '#E6C16B',
-  green: '#9DD89F',
-  danger: '#D36B58',
-  mint: '#DDF7F1',
-  mintText: '#21A58F',
-  yellow: '#FFF1D9',
-  yellowText: '#E3A55E',
-  greenSoft: '#E8F8DF',
-  greenText: '#7BC57D',
-  salmon: '#FFE1D6',
-  salmonText: '#F08A6A',
+  warning: '#C77B65',
+  blue: '#7FB9AA',
+  violet: '#CBB47A',
+  green: '#82B98A',
+  danger: '#B86658',
+  mint: '#E6F4EF',
+  mintText: '#3B937F',
+  yellow: '#FFF6E6',
+  yellowText: '#B38B4D',
+  greenSoft: '#EDF7EA',
+  greenText: '#669B6B',
+  salmon: '#FBE3DA',
+  salmonText: '#B86658',
   // nuevos, solo para Académico:
   academicInk: '#1F3A2E',
-  academicLine: '#E7E0D2',
-  academicChipBg: '#FBF7EF',
+  academicLine: '#E5DCC9',
+  academicChipBg: '#FFF9EF',
 };
 
 const tabs: BottomBarTab[] = [
@@ -93,11 +92,11 @@ const tabs: BottomBarTab[] = [
 ];
 
 const bottomBarTone = {
-  activeIcon: palette.primary,
-  activePill: palette.primary,
+  activeIcon: '#E9A85F',
+  activePill: '#E9A85F',
   centerGradient: ['#FFF0CF', '#F7C977', '#E9A85F', '#D98A45'] as [string, string, string, string],
-  centerShadow: palette.secondary,
-  inactiveIcon: palette.muted,
+  centerShadow: '#F4C47F',
+  inactiveIcon: '#A1A197',
 };
 
 type AdminUser = {
@@ -173,9 +172,11 @@ type LearningResult = {
 type CompetenceAssignment = {
   id: string;
   competenciaId?: string;
-  fichaId?: string;
-  instructorUid?: string;
-  estado?: string;
+  resultadoId: string;
+  resultadoIds: string[];
+  fichaId: string;
+  instructorUid: string;
+  estado: string;
 };
 
 const formationSheets: { id: string; program: string; startDate: string; trimester: string; learners: number; instructors: string[]; interns: string[]; status: string }[] = [];
@@ -192,6 +193,40 @@ function isDemoRecord(id?: string) {
 
 function isActiveRecord(record: { activo?: boolean; estado?: string }) {
   return record.activo !== false && record.estado !== 'Inactivo' && record.estado !== 'Inactiva';
+}
+
+function uniqueById<T extends { id: string }>(items: T[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
+function parseDateMillis(value?: string | null) {
+  if (!value) return 0;
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function countSheetsNeedingTrimesterReview(sheets: AcademicSheet[], trimesters: AcademicTrimester[]) {
+  const activeSheets = sheets.filter(isActiveRecord);
+  const trimestersById = new Map(trimesters.map((trimester) => [trimester.id, trimester]));
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const reviewWindowMs = 15 * 24 * 60 * 60 * 1000;
+
+  return activeSheets.filter((sheet) => {
+    const hasTrimester = Boolean(sheet.trimestreId || sheet.trimestreActual || sheet.trimestreNumero);
+    if (!hasTrimester) return true;
+
+    const linkedTrimester = sheet.trimestreId ? trimestersById.get(sheet.trimestreId) : undefined;
+    const endDateMillis = parseDateMillis(sheet.trimestreFechaFin || linkedTrimester?.fechaFin);
+    if (!endDateMillis) return true;
+
+    return endDateMillis - today.getTime() <= reviewWindowMs;
+  }).length;
 }
 
 function hasVerifiedEmail(user: AdminUser) {
@@ -218,13 +253,12 @@ const roleOptions = ['Aprendiz', 'Instructor', 'Pasante', 'Administrador'];
 const formationTypeOptions = ['Tecnólogo', 'Técnico', 'Curso corto'];
 
 const academicSectionOptions: { id: AcademicSectionId; label: string; icon: AdminIconName }[] = [
+  { id: 'resumen', label: 'Resumen', icon: 'format-list-bulleted' },
   { id: 'programas', label: 'Programas', icon: 'book-education-outline' },
   { id: 'fichas', label: 'Fichas', icon: 'folder-cog-outline' },
-  { id: 'usuarios-fichas', label: 'Usuarios a fichas', icon: 'account-multiple-plus-outline' },
-  { id: 'pasantes', label: 'Pasantes', icon: 'account-tie-outline' },
-  { id: 'resumen', label: 'Resumen', icon: 'format-list-bulleted' },
   { id: 'competencias', label: 'Competencias y RAP', icon: 'certificate-outline' },
-  { id: 'asignar-competencia', label: 'Asignar competencia', icon: 'source-branch' },
+  { id: 'asignar-competencia', label: 'Asignar RAP', icon: 'source-branch' },
+  { id: 'pasantes', label: 'Pasantes', icon: 'account-tie-outline' },
 ];
 
 type AdminWorkspaceProps = {
@@ -235,6 +269,7 @@ type AdminWorkspaceProps = {
 export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<AdminTab>('inicio');
+  const [activeAcademicSection, setActiveAcademicSection] = useState<AcademicSectionId>('resumen');
   const [selectedRole, setSelectedRole] = useState('Aprendiz');
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
@@ -260,7 +295,7 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
       pendingUsers: adminUsers.filter((user) => hasVerifiedEmail(user) && !String(user.rol || '').trim()).length,
       activeSheets: sheets.filter(isActiveRecord).length,
       learners: adminUsers.filter((user) => String(user.rol || '').toLowerCase() === 'aprendiz').length,
-      trimesterUpdates: trimesters.filter(isActiveRecord).length,
+      trimesterUpdates: countSheetsNeedingTrimesterReview(sheets, trimesters),
       programs: programs.filter(isActiveRecord).length,
       instructors: adminUsers.filter((user) => String(user.rol || '').toLowerCase() === 'instructor').length,
       pasantes: adminUsers.filter((user) => String(user.rol || '').toLowerCase() === 'pasante').length,
@@ -377,18 +412,35 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
     }
   };
 
+  const handleOpenAdminNews = (target: { tab: AdminTab; section?: AcademicSectionId; roleFilter?: string }) => {
+    if (target.roleFilter !== undefined) {
+      setSelectedRole(target.roleFilter);
+    }
+
+    if (target.section) {
+      setActiveAcademicSection(target.section);
+    }
+
+    setActiveTab(target.tab);
+  };
+
   if (!fontsLoaded) {
     return null;
   }
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      <View style={styles.screen}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        style={styles.screen}>
         <ScrollView
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 160 }]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
-          {activeTab === 'inicio' && <AdminHome counts={counts} onOpenTab={setActiveTab} />}
+          {activeTab === 'inicio' && <AdminHome counts={counts} onOpenNews={handleOpenAdminNews} />}
           {activeTab === 'usuarios' && (
             <UsersTab
               assigningUid={assigningUid}
@@ -405,11 +457,13 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
               error={academicError}
               loading={academicLoading}
               assignments={competenceAssignments}
+              activeAcademicSection={activeAcademicSection}
               competences={competences}
               learningResults={learningResults}
               programs={programs.length ? programs : demoPrograms}
               sheets={sheets.length ? sheets : demoAcademicSheets}
               users={adminUsers}
+              onAcademicSectionChange={setActiveAcademicSection}
             />
           )}
           {activeTab === 'trimestres' && (
@@ -433,7 +487,7 @@ export function AdminWorkspace({ onSignOut, session }: AdminWorkspaceProps) {
           onCenterPress={() => setActiveTab('usuarios')}
           onTabPress={(tabId) => setActiveTab(tabId as AdminTab)}
         />
-      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -465,7 +519,7 @@ function HeaderCard({ session }: { session: AuthenticatedSession }) {
 
 function AdminHome({
   counts,
-  onOpenTab,
+  onOpenNews,
 }: {
   counts: {
     pendingUsers: number;
@@ -479,85 +533,105 @@ function AdminHome({
     competenceAssignments: number;
     totalUsers: number;
   };
-  onOpenTab: (tab: AdminTab) => void;
+  onOpenNews: (target: { tab: AdminTab; section?: AcademicSectionId; roleFilter?: string }) => void;
 }) {
+  const newsItems: {
+    id: string;
+    title: string;
+    detail: string;
+    value: string;
+    icon: AdminIconName;
+    accent: string;
+    target: { tab: AdminTab; section?: AcademicSectionId; roleFilter?: string };
+  }[] = [
+    {
+      id: 'pending-users',
+      title: 'Usuarios pendientes de rol',
+      detail: counts.pendingUsers ?
+         'Hay cuentas nuevas esperando validación del administrador.'
+        : 'No hay cuentas pendientes por clasificar.',
+      value: String(counts.pendingUsers),
+      icon: 'account-alert-outline',
+      accent: palette.mintText,
+      target: { tab: 'usuarios', roleFilter: '' },
+    },
+    {
+      id: 'trimester-updates',
+      title: 'Trimestres por revisar',
+      detail: counts.trimesterUpdates ?
+         'Hay fichas sin trimestre o con cierre cercano que necesitan actualización.'
+        : 'No hay fichas sin trimestre ni cierres próximos.',
+      value: String(counts.trimesterUpdates),
+      icon: 'calendar-clock-outline',
+      accent: palette.greenText,
+      target: { tab: 'trimestres' },
+    },
+    {
+      id: 'competence-assignments',
+      title: 'Asignaciones académicas',
+      detail: `${counts.competenceAssignments} asignaciones de competencias y RAP registradas.`,
+      value: String(counts.competenceAssignments),
+      icon: 'source-branch',
+      accent: palette.yellowText,
+      target: { tab: 'academico', section: 'asignar-competencia' },
+    },
+    {
+      id: 'active-sheets',
+      title: 'Fichas activas',
+      detail: `${counts.assignedLearners} aprendices ya están vinculados a una ficha.`,
+      value: String(counts.activeSheets),
+      icon: 'folder-cog-outline',
+      accent: palette.salmonText,
+      target: { tab: 'academico', section: 'fichas' },
+    },
+  ];
+
   return (
     <>
       <View style={styles.metricsRow}>
         <MetricCard
           accent={palette.mintText}
-          icon="account-alert-outline"
-          label="Pendientes de rol"
-          value={String(counts.pendingUsers)}
+          icon="account-group-outline"
+          label="Usuarios totales"
+          value={String(counts.totalUsers)}
         />
         <MetricCard
           accent={palette.yellowText}
-          icon="folder-cog-outline"
-          label="Fichas activas"
-          value={String(counts.activeSheets)}
+          icon="account-school-outline"
+          label="Instructores"
+          value={String(counts.instructors)}
         />
         <MetricCard
           accent={palette.greenText}
-          icon="calendar-clock-outline"
-          label="Trimestres"
-          value={String(counts.trimesterUpdates)}
+          icon="book-education-outline"
+          label="Programas"
+          value={String(counts.programs)}
         />
         <MetricCard
           accent={palette.salmonText}
-          icon="account-school-outline"
-          label="Aprendices"
-          value={String(counts.learners)}
+          icon="account-tie-outline"
+          label="Pasantes"
+          value={String(counts.pasantes)}
         />
       </View>
 
-      <Section title="Centro de control" subtitle="Accesos rapidos para administrar Biomind">
-        <View style={styles.quickGrid}>
-          <QuickAction
-            icon="account-plus-outline"
-            label="Usuarios"
-            text="Crear, editar, desactivar y asignar rol"
-            onPress={() => onOpenTab('usuarios')}
-          />
-          <QuickAction
-            icon="book-education-outline"
-            label="Académico"
-            text="Fichas, competencias, RAP, grupos y proyectos"
-            onPress={() => onOpenTab('academico')}
-          />
-          <QuickAction
-            icon="calendar-sync-outline"
-            label="Trimestres"
-            text="Fechas por ficha y actualizacion visible"
-            onPress={() => onOpenTab('trimestres')}
-          />
-          <QuickAction
-            icon="chart-box-outline"
-            label="Seguimiento"
-            text="Avances por aprendiz, ficha y proyecto"
-            onPress={() => onOpenTab('academico')}
-          />
-        </View>
-      </Section>
-
-      <Section title="Estado actual" subtitle="Resumen real de la información guardada en Biomind">
-        <View style={styles.flowGrid}>
-          {[
-            { label: 'Programas activos', icon: 'book-education-outline' as AdminIconName, done: counts.programs },
-            { label: 'Aprendices con ficha', icon: 'account-multiple-plus-outline' as AdminIconName, done: counts.assignedLearners },
-            { label: 'Instructores', icon: 'account-school-outline' as AdminIconName, done: counts.instructors },
-            { label: 'Pasantes', icon: 'account-tie-outline' as AdminIconName, done: counts.pasantes },
-            { label: 'Competencias asignadas', icon: 'source-branch' as AdminIconName, done: counts.competenceAssignments },
-            { label: 'Usuarios totales', icon: 'account-group-outline' as AdminIconName, done: counts.totalUsers },
-          ].map((flow) => {
-            const isEmpty = flow.done === 0;
-            return (
-              <View key={flow.label} style={[styles.flowCard, isEmpty && styles.flowCardEmpty]}>
-                <MaterialCommunityIcons name={flow.icon} size={20} color={isEmpty ? palette.muted : palette.primary} />
-                <Text style={[styles.flowNumber, isEmpty && styles.flowNumberEmpty]}>{flow.done}</Text>
-                <Text style={styles.flowText}>{flow.label}</Text>
+      <Section title="Novedades" subtitle="Actualizaciones recientes y accesos rápidos para administrar Biomind">
+        <View style={styles.adminNewsList}>
+          {newsItems.map((item) => (
+            <Pressable key={item.id} onPress={() => onOpenNews(item.target)} style={styles.adminNewsCard}>
+              <View style={[styles.adminNewsIcon, { backgroundColor: `${item.accent}1F` }]}>
+                <MaterialCommunityIcons name={item.icon} size={20} color={item.accent} />
               </View>
-            );
-          })}
+              <View style={styles.adminNewsCopy}>
+                <Text style={styles.adminNewsTitle}>{item.title}</Text>
+                <Text style={styles.adminNewsText}>{item.detail}</Text>
+              </View>
+              <View style={styles.adminNewsValueWrap}>
+                <Text style={[styles.adminNewsValue, { color: item.accent }]}>{item.value}</Text>
+                <MaterialCommunityIcons name="chevron-right" size={18} color={palette.muted} />
+              </View>
+            </Pressable>
+          ))}
         </View>
       </Section>
     </>
@@ -591,7 +665,13 @@ function UsersTab({
         sensitivity: 'base',
       })
     );
-  const filteredUsers = users.filter((user) => normalizeUser(user).includes(userSearch.trim().toLowerCase()));
+  const selectedRoleKey = selectedRole.trim().toLowerCase();
+  const filteredUsers = users
+    .filter((user) => normalizeUser(user).includes(userSearch.trim().toLowerCase()))
+    .filter((user) => {
+      if (!selectedRoleKey) return true;
+      return String(user.rol || '').trim().toLowerCase() === selectedRoleKey;
+    });
   const verifiedUsers = sortUsers(filteredUsers.filter(hasVerifiedEmail));
   const unverifiedUsers = sortUsers(filteredUsers.filter((user) => !hasVerifiedEmail(user)));
 
@@ -603,7 +683,7 @@ function UsersTab({
         title="Usuarios"
       />
 
-      <Section title="Asignar rol" subtitle="Solo aparecen para asignación los usuarios con correo verificado"
+      <Section title="Gestión de usuarios" subtitle="Filtra por rol y edita cada usuario desde su tarjeta"
       >
         <SearchField
           placeholder="Buscar por nombre, correo, identificación o rol..."
@@ -612,6 +692,13 @@ function UsersTab({
         />
 
         <View style={styles.segmented}>
+          <Pressable
+            onPress={() => onRoleChange('')}
+            style={[styles.segment, !selectedRole && styles.segmentActive]}>
+            <Text style={[styles.segmentText, !selectedRole && styles.segmentTextActive]}>
+              Todos
+            </Text>
+          </Pressable>
           {roleOptions.map((role) => (
             <Pressable
               key={role}
@@ -636,7 +723,6 @@ function UsersTab({
             <View key={user.id}>
               <UserRow
                 assigning={assigningUid === user.id}
-                selectedRole={selectedRole}
                 user={user}
                 onAssignRole={onAssignRole}
                 onDelete={async () => {
@@ -661,7 +747,7 @@ function UsersTab({
         ) : (
           <FeedbackBox
             icon="account-clock-outline"
-            text="Aún no hay usuarios con correo verificado esperando rol."
+            text="No hay usuarios verificados para este filtro."
             tone="info"
           />
         )}
@@ -675,30 +761,29 @@ function UsersTab({
         </Section>
       ) : null}
 
-      <Section title="Permisos por rol" subtitle="Acceso esperado despues de aprobar la cuenta">
-        <PermissionRow icon="leaf" role="Aprendiz" text="Bitacoras, evidencias, proyectos, preguntas, IA y graficas propias." />
-        <PermissionRow icon="account-school-outline" role="Instructor" text="Fichas, competencias, RAP, proyectos, grupos, evidencias e informes con IA." />
-        <PermissionRow icon="account-tie-outline" role="Pasante" text="Fichas asignadas, preguntas, observaciones, reportes al instructor e IA." />
-      </Section>
     </>
   );
 }
 
 function AcademicTab({
+  activeAcademicSection,
   assignments,
   competences,
   error,
   learningResults,
   loading,
+  onAcademicSectionChange,
   programs,
   sheets,
   users,
 }: {
+  activeAcademicSection: AcademicSectionId;
   assignments: CompetenceAssignment[];
   competences: AcademicCompetence[];
   error: string;
   learningResults: LearningResult[];
   loading: boolean;
+  onAcademicSectionChange: (section: AcademicSectionId) => void;
   programs: AcademicProgram[];
   sheets: AcademicSheet[];
   users: AdminUser[];
@@ -710,7 +795,6 @@ function AcademicTab({
   const pasantes = users.filter((user) => String(user.rol || '').toLowerCase() === 'pasante' && user.estado !== 'suspendido');
   const activeCompetences = competences.filter(isActiveRecord);
   const firstProgramId = activePrograms[0]?.id || '';
-  const [activeAcademicSection, setActiveAcademicSection] = useState<AcademicSectionId>('programas');
   const [programForm, setProgramForm] = useState({ id: '', codigo: '', nombre: '', tipoFormacion: formationTypeOptions[0], activo: true, estado: 'Activo' });
   const [sheetForm, setSheetForm] = useState({ id: '', numero: '', programaId: firstProgramId, activo: true, estado: 'Activa' });
   const [competenceForm, setCompetenceForm] = useState({ id: '', codigo: '', nombre: '', descripcion: '' });
@@ -718,7 +802,7 @@ function AcademicTab({
   const [learnerFicha, setLearnerFicha] = useState({ learnerUid: '', fichaId: '' });
   const [instructorFicha, setInstructorFicha] = useState({ instructorUid: '', fichaId: '' });
   const [pasanteInstructor, setPasanteInstructor] = useState({ pasanteUid: '', instructorUid: '' });
-  const [competenceAssignment, setCompetenceAssignment] = useState({ instructorUid: '', fichaId: '', competenciaId: '' });
+  const [competenceAssignment, setCompetenceAssignment] = useState({ instructorUid: '', fichaId: '', competenciaId: '', resultadoId: '' });
   const [summarySheetId, setSummarySheetId] = useState('');
   const [programSearch, setProgramSearch] = useState('');
   const [sheetSearch, setSheetSearch] = useState('');
@@ -741,6 +825,7 @@ function AcademicTab({
     const firstPasanteId = pasantes[0]?.id || '';
     const firstSheetId = activeSheets[0]?.id || '';
     const firstCompetenceId = activeCompetences[0]?.id || '';
+    const firstRapId = learningResults.find((rap) => rap.competenciaId === firstCompetenceId && isActiveRecord(rap))?.id || '';
 
     setLearnerFicha((current) => {
       const next = {
@@ -768,15 +853,19 @@ function AcademicTab({
         instructorUid: current.instructorUid || firstInstructorId,
         fichaId: current.fichaId || firstSheetId,
         competenciaId: current.competenciaId || firstCompetenceId,
+        resultadoId: current.resultadoId || firstRapId,
       };
-      return next.instructorUid === current.instructorUid && next.fichaId === current.fichaId && next.competenciaId === current.competenciaId ? current : next;
+      return next.instructorUid === current.instructorUid
+        && next.fichaId === current.fichaId
+        && next.competenciaId === current.competenciaId
+        && next.resultadoId === current.resultadoId ? current : next;
     });
     setRapForm((current) => {
       const nextCompetenciaId = current.competenciaId || firstCompetenceId;
       return nextCompetenciaId === current.competenciaId ? current : { ...current, competenciaId: nextCompetenciaId };
     });
     setSummarySheetId((current) => current || firstSheetId);
-  }, [activeSheets[0]?.id, activeCompetences[0]?.id, instructors[0]?.id, learners[0]?.id, pasantes[0]?.id]);
+  }, [activeSheets[0]?.id, activeCompetences[0]?.id, instructors[0]?.id, learners[0]?.id, learningResults.length, pasantes[0]?.id]);
 
   const selectedProgram = activePrograms.find((program) => program.id === sheetForm.programaId) || activePrograms[0];
   const selectedLearner = learners.find((user) => user.id === learnerFicha.learnerUid);
@@ -809,8 +898,12 @@ function AcademicTab({
     const instructor = users.find((user) => user.id === assignment.instructorUid);
     const sheet = sheets.find((item) => item.id === assignment.fichaId);
     const competence = competences.find((item) => item.id === assignment.competenciaId);
-    return `${instructor?.nombre || ''} ${instructor?.correo || ''} ${sheet?.numero || ''} ${competence?.codigo || ''} ${competence?.nombre || ''} ${assignment.estado || ''}`;
+    const rap = learningResults.find((item) => item.id === assignment.resultadoId || (assignment.resultadoIds || []).includes(item.id));
+    return `${instructor?.nombre || ''} ${instructor?.correo || ''} ${sheet?.numero || ''} ${competence?.codigo || ''} ${competence?.nombre || ''} ${rap?.codigo || ''} ${rap?.descripcion || ''} ${assignment.estado || ''}`;
   });
+  const assignableRaps = learningResults.filter((rap) =>
+    rap.competenciaId === competenceAssignment.competenciaId && isActiveRecord(rap)
+  );
 
   const runAcademicAction = async (action: () => Promise<void>, successMessage: string) => {
     setSaving(true);
@@ -887,7 +980,7 @@ function AcademicTab({
         subtitle="Gestión de fichas, asignaciones, competencias, RAP, proyectos y grupos"
         title="Académico"
       />
-      <AcademicSectionNav activeSection={activeAcademicSection} onChange={setActiveAcademicSection} />
+      <AcademicSectionNav activeSection={activeAcademicSection} onChange={onAcademicSectionChange} />
 
       {activeAcademicSection === 'programas' ? (
         <Section title="Programas" subtitle="Crear, listar, editar y desactivar programas">
@@ -979,57 +1072,21 @@ function AcademicTab({
         </Section>
       ) : null}
 
-      {activeAcademicSection === 'usuarios-fichas' ? (
-        <Section title="Asignar usuarios a fichas" subtitle="Selecciona primero la persona y luego la ficha">
-          <View style={styles.formCard}>
-            <Text style={styles.formHint}>Aprendiz a ficha</Text>
-            <AssignmentStep number="1" text="Selecciona el aprendiz" />
-            <OptionPicker
-              emptyLabel="Primero asigna usuarios aprendiz"
-              options={learners.map((user) => ({
-                label: `${user.nombre || user.correo || user.id}${user.ficha ? ` - Actual: ${user.ficha}` : ' - Sin ficha'}`,
-                value: user.id,
-              }))}
-              value={learnerFicha.learnerUid}
-              onChange={(learnerUid) => setLearnerFicha((current) => ({ ...current, learnerUid }))}
-            />
-            <AssignmentStep number="2" text="Selecciona la ficha" />
-            <OptionPicker
-              emptyLabel="Primero crea una ficha"
-              options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
-              value={learnerFicha.fichaId}
-              onChange={(fichaId) => setLearnerFicha((current) => ({ ...current, fichaId }))}
-            />
-            <Text style={styles.cardText}>
-              La ficha seleccionada asignará automáticamente programa y trimestre al aprendiz.
-            </Text>
-            <AssignmentSummary
-              text={`${selectedLearner?.nombre || 'Aprendiz pendiente'} → Ficha ${selectedLearnerSheet?.numero || 'pendiente'}`}
-            />
-            <Pressable
-              disabled={saving || !selectedLearner || !selectedLearnerSheet}
-              onPress={() => runAcademicAction(
-                () => asignarAprendizAFicha({ aprendiz: selectedLearner, ficha: selectedLearnerSheet }),
-                'Aprendiz asignado a la ficha.'
-              )}
-              style={[styles.formButton, (saving || !selectedLearner || !selectedLearnerSheet) && styles.smallButtonDisabled]}>
-              <Text style={styles.formButtonText}>Asignar ficha al aprendiz</Text>
-            </Pressable>
-          </View>
-
+      {activeAcademicSection === 'pasantes' ? (
+        <Section title="Instructores y pasantes" subtitle="Asigna fichas a instructores y pasantes al instructor responsable">
           <View style={styles.formCard}>
             <Text style={styles.formHint}>Instructor a ficha</Text>
             <AssignmentStep number="1" text="Selecciona el instructor" />
             <OptionPicker
               emptyLabel="Primero asigna usuarios instructor"
               options={instructors.map((user) => ({
-                label: `${user.nombre || user.correo || user.id} - ${user.fichasAsignadas?.length || 0} ficha(s)`,
+                label: `${user.nombre || user.correo || user.id} - ${(user.fichasAsignadas || []).length || 0} ficha(s)`,
                 value: user.id,
               }))}
               value={instructorFicha.instructorUid}
               onChange={(instructorUid) => setInstructorFicha((current) => ({ ...current, instructorUid }))}
             />
-            <AssignmentStep number="2" text="Selecciona la ficha que orientara" />
+            <AssignmentStep number="2" text="Selecciona la ficha que orientará" />
             <OptionPicker
               emptyLabel="Primero crea una ficha"
               options={activeSheets.map((sheet) => ({ label: `Ficha ${sheet.numero} - ${sheet.programaNombre || 'Sin programa'}`, value: sheet.id }))}
@@ -1037,7 +1094,7 @@ function AcademicTab({
               onChange={(fichaId) => setInstructorFicha((current) => ({ ...current, fichaId }))}
             />
             <AssignmentSummary
-              text={`${instructors.find((user) => user.id === instructorFicha.instructorUid)?.nombre || 'Instructor pendiente'} → Ficha ${activeSheets.find((sheet) => sheet.id === instructorFicha.fichaId)?.numero || 'pendiente'}`}
+              text={`${instructors.find((user) => user.id === instructorFicha.instructorUid)?.nombre || 'Instructor pendiente'} -> Ficha ${activeSheets.find((sheet) => sheet.id === instructorFicha.fichaId)?.numero || 'pendiente'}`}
             />
             <Pressable
               disabled={saving}
@@ -1049,11 +1106,6 @@ function AcademicTab({
               <Text style={styles.formButtonText}>Asignar instructor</Text>
             </Pressable>
           </View>
-        </Section>
-      ) : null}
-
-      {activeAcademicSection === 'pasantes' ? (
-        <Section title="Asignar pasante" subtitle="El pasante heredara las fichas del instructor seleccionado">
           <View style={styles.formCard}>
             <Text style={styles.formHint}>Pasante a instructor</Text>
             <AssignmentStep number="1" text="Selecciona el pasante" />
@@ -1123,12 +1175,38 @@ function AcademicTab({
             const sheetInstructors = instructors.filter((user) =>
               (sheet.instructorUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
             );
-            const sheetPasantes = pasantes.filter((user) =>
-              (sheet.pasantesUids || []).includes(user.id) || (user.fichasAsignadas || []).includes(sheet.id)
+            const sheetInstructorIds = new Set(sheetInstructors.map((user) => user.id));
+            const sheetPasantes = uniqueById(pasantes.filter((user) =>
+              (sheet.pasantesUids || []).includes(user.id)
+              || (user.fichasAsignadas || []).includes(sheet.id)
+              || (user.instructorUid ? sheetInstructorIds.has(user.instructorUid) : false)
+            ));
+            const sheetAssignments = assignments.filter((assignment) =>
+              assignment.fichaId === sheet.id && isActiveRecord(assignment)
+            );
+            const sheetAssignmentRows = sheetAssignments.map((assignment) => {
+              const instructor = users.find((user) => user.id === assignment.instructorUid);
+              const competence = competences.find((item) => item.id === assignment.competenciaId);
+              const rapIds = [
+                assignment.resultadoId,
+                ...(Array.isArray(assignment.resultadoIds) ? assignment.resultadoIds : []),
+              ].filter(Boolean);
+              const assignedRaps = uniqueById(learningResults.filter((rap) => rapIds.includes(rap.id) && isActiveRecord(rap)));
+
+              return {
+                id: assignment.id,
+                competence,
+                instructor,
+                raps: assignedRaps,
+              };
+            });
+            const totalAssignedRaps = sheetAssignmentRows.reduce(
+              (total, row) => total + (row.raps?.length || 0),
+              0
             );
 
             return (
-              <View key={`summary-${sheet.id}`} style={styles.sheetCard}>
+              <View key={`summary-${sheet.id}`} style={styles.summaryCard}>
                 <View style={styles.sheetHeader}>
                   <View style={styles.userCopy}>
                     <Text style={styles.sheetTitle}>
@@ -1136,6 +1214,12 @@ function AcademicTab({
                     </Text>
                     <Text style={styles.sheetProgram}>{sheet.programaNombre || 'Sin programa'}</Text>
                   </View>
+                </View>
+                <View style={styles.summaryStatsRow}>
+                  <MiniStat label="Aprendices" value={String(sheetLearners.length)} />
+                  <MiniStat label="Instructores" value={String(sheetInstructors.length)} />
+                  <MiniStat label="Pasantes" value={String(sheetPasantes.length)} />
+                  <MiniStat label="RAP" value={String(totalAssignedRaps)} />
                 </View>
 
                 <RelationGroup
@@ -1164,6 +1248,10 @@ function AcademicTab({
                     () => removePasanteFromFicha(user.id, sheet.id),
                     'Pasante retirado de la ficha.'
                   )}
+                />
+                <AssignmentSummaryGroup
+                  emptyText="Sin competencias ni RAP asignados a esta ficha"
+                  rows={sheetAssignmentRows.filter((row) => row.competence && row.instructor) as { id: string; competence: AcademicCompetence; instructor: AdminUser; raps: LearningResult[] }[]}
                 />
               </View>
             );
@@ -1211,7 +1299,10 @@ function AcademicTab({
           </ScrollableAdminList>
 
           <View style={styles.formCard}>
-            <Text style={styles.formHint}>Resultado de aprendizaje</Text>
+            <View style={styles.rapFormHeader}>
+              <Text style={styles.rapFormEyebrow}>Formulario independiente</Text>
+              <Text style={styles.rapFormTitle}>Resultado de aprendizaje</Text>
+            </View>
             <OptionPicker
               emptyLabel="Primero crea una competencia"
               options={competences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
@@ -1247,7 +1338,7 @@ function AcademicTab({
                   onDeactivate={() => desactivarResultadoAprendizaje(rap.id)}
                   onEdit={() => setRapForm({
                     id: rap.id,
-                    competenciaId: rap.competenciaId || activeCompetences[0]?.id || '',
+                    competenciaId: rap.competenciaId || activeCompetences[0].id || '',
                     codigo: rap.codigo || '',
                     descripcion: rap.descripcion || '',
                   })}
@@ -1259,7 +1350,7 @@ function AcademicTab({
       ) : null}
 
       {activeAcademicSection === 'asignar-competencia' ? (
-        <Section title="Asignar competencia" subtitle="Instructor, ficha y competencia con RAP activos">
+        <Section title="Asignar RAP" subtitle="Instructor, ficha, competencia y resultado de aprendizaje específico">
           <View style={styles.formCard}>
             <AssignmentStep number="1" text="Selecciona el instructor" />
             <OptionPicker
@@ -1280,19 +1371,29 @@ function AcademicTab({
               emptyLabel="Primero crea una competencia"
               options={activeCompetences.map((competence) => ({ label: `${competence.codigo || 'COMP'} - ${competence.nombre || ''}`, value: competence.id }))}
               value={competenceAssignment.competenciaId}
-              onChange={(competenciaId) => setCompetenceAssignment((current) => ({ ...current, competenciaId }))}
+              onChange={(competenciaId) => {
+                const nextRapId = learningResults.find((rap) => rap.competenciaId === competenciaId && isActiveRecord(rap))?.id || '';
+                setCompetenceAssignment((current) => ({ ...current, competenciaId, resultadoId: nextRapId }));
+              }}
+            />
+            <AssignmentStep number="4" text="Selecciona el RAP específico" />
+            <OptionPicker
+              emptyLabel="Esta competencia no tiene RAP activos"
+              options={assignableRaps.map((rap) => ({ label: `${rap.codigo || 'RAP'} - ${rap.descripcion || ''}`, value: rap.id }))}
+              value={competenceAssignment.resultadoId}
+              onChange={(resultadoId) => setCompetenceAssignment((current) => ({ ...current, resultadoId }))}
             />
             <AssignmentSummary
-              text={`${instructors.find((user) => user.id === competenceAssignment.instructorUid)?.nombre || 'Instructor'} → Ficha ${activeSheets.find((sheet) => sheet.id === competenceAssignment.fichaId)?.numero || 'pendiente'} → ${activeCompetences.find((item) => item.id === competenceAssignment.competenciaId)?.nombre || 'Competencia pendiente'}`}
+              text={`${instructors.find((user) => user.id === competenceAssignment.instructorUid)?.nombre || 'Instructor'} → Ficha ${activeSheets.find((sheet) => sheet.id === competenceAssignment.fichaId)?.numero || 'pendiente'} → ${activeCompetences.find((item) => item.id === competenceAssignment.competenciaId)?.nombre || 'Competencia pendiente'} → ${assignableRaps.find((item) => item.id === competenceAssignment.resultadoId)?.codigo || 'RAP pendiente'}`}
             />
             <Pressable
-              disabled={saving}
+              disabled={saving || !competenceAssignment.resultadoId}
               onPress={() => runAcademicAction(
                 () => asignarCompetenciaInstructor(competenceAssignment),
-                'Competencia asignada al instructor para la ficha.'
+                'RAP asignado al instructor para la ficha.'
               )}
-              style={[styles.formButton, saving && styles.smallButtonDisabled]}>
-              <Text style={styles.formButtonText}>Asignar competencia</Text>
+              style={[styles.formButton, (saving || !competenceAssignment.resultadoId) && styles.smallButtonDisabled]}>
+              <Text style={styles.formButtonText}>Asignar RAP</Text>
             </Pressable>
           </View>
           <ScrollableAdminList
@@ -1304,11 +1405,13 @@ function AcademicTab({
               const instructor = users.find((user) => user.id === assignment.instructorUid);
               const sheet = sheets.find((item) => item.id === assignment.fichaId);
               const competence = competences.find((item) => item.id === assignment.competenciaId);
+              const rap = learningResults.find((item) => item.id === assignment.resultadoId || (assignment.resultadoIds || []).includes(item.id));
               return (
                 <SimpleAdminCard
+                  variant="loose"
                   key={assignment.id}
-                  title={`${competence?.codigo || 'COMP'} - ${competence?.nombre || 'Competencia'}`}
-                  subtitle={`${instructor?.nombre || 'Instructor'} / Ficha ${sheet?.numero || 'sin ficha'}`}
+                  title={`${rap?.codigo || 'RAP'} - ${rap?.descripcion || 'Resultado de aprendizaje'}`}
+                  subtitle={`${competence?.codigo || 'COMP'} - ${competence?.nombre || 'Competencia'} / ${instructor?.nombre || 'Instructor'} / Ficha ${sheet?.numero || 'sin ficha'}`}
                   inactive={!isActiveRecord(assignment)}
                   onDeactivate={isActiveRecord(assignment) ? () => runAcademicAction(
                     () => desactivarAsignacionCompetencia(assignment.id),
@@ -1337,7 +1440,7 @@ function TrimesterTab({
 }) {
   const activeSheets = sheets.filter(isActiveRecord);
   const activeTrimesters = trimesters.filter(isActiveRecord);
-  const firstTrimesterId = activeTrimesters[0]?.id || '';
+  const firstTrimesterId = activeTrimesters[0].id || '';
   const [sheetSearch, setSheetSearch] = useState('');
   const [dateForm, setDateForm] = useState({ id: '', fechaInicio: '', fechaFin: '' });
   const [form, setForm] = useState({
@@ -1366,8 +1469,8 @@ function TrimesterTab({
   const toggleSheet = (sheetId: string) => {
     setForm((current) => ({
       ...current,
-      fichaIds: current.fichaIds.includes(sheetId)
-        ? current.fichaIds.filter((id) => id !== sheetId)
+      fichaIds: current.fichaIds.includes(sheetId) ?
+         current.fichaIds.filter((id) => id !== sheetId)
         : [...current.fichaIds, sheetId],
     }));
   };
@@ -1393,7 +1496,7 @@ function TrimesterTab({
       setDateForm({ id: '', fechaInicio: '', fechaFin: '' });
       setFeedback('Fechas de trimestre creadas correctamente.');
     } catch (submitError: any) {
-      setFeedback(submitError?.message || 'No pudimos crear las fechas.');
+      setFeedback(submitError.message || 'No pudimos crear las fechas.');
     } finally {
       setSaving(false);
     }
@@ -1523,7 +1626,7 @@ function TrimesterTab({
                     Ficha {sheet.numero || sheet.id}
                   </Text>
                   <Text style={[styles.multiSelectMeta, selected && styles.multiSelectTextActive]}>
-                    {sheet.programaNombre || 'Sin programa'}
+                    {sheet.programaNombre || 'Sin programa'} ?
                   </Text>
                 </Pressable>
               );
@@ -1560,6 +1663,7 @@ function TrimesterTab({
 }
 function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
   const [name, setName] = useState(session.name);
+  const [email, setEmail] = useState(session.email);
   const [photoUri, setPhotoUri] = useState(session.photoUrl || '');
   const [photoBase64, setPhotoBase64] = useState('');
   const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
@@ -1568,8 +1672,9 @@ function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
 
   useEffect(() => {
     setName(session.name);
+    setEmail(session.email);
     setPhotoUri(session.photoUrl || '');
-  }, [session.name, session.photoUrl]);
+  }, [session.email, session.name, session.photoUrl]);
 
   const pickProfilePhoto = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1610,11 +1715,17 @@ function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
       return;
     }
 
+    if (!email.trim() || !email.includes('@')) {
+      setFeedback('Ingresa un correo válido antes de guardar el perfil.');
+      return;
+    }
+
     setSaving(true);
     setFeedback('');
 
     try {
       const updatedProfile = await actualizarPerfilUsuario({
+        correo: email,
         nombre: name,
         fotoPerfilBase64: photoBase64 || undefined,
         fotoPerfilMimeType: photoBase64 ? photoMimeType : undefined,
@@ -1644,7 +1755,7 @@ function ProfileTab({ onSignOut, session }: AdminWorkspaceProps) {
 
         <View style={styles.adminForm}>
           <ProfileField label="Nombre" value={name} onChangeText={setName} />
-          <ProfileField label="Correo" value={session.email} editable={false} />
+          <ProfileField label="Correo" value={email} onChangeText={setEmail} />
           <ProfileField label="Rol" value={session.role} editable={false} />
         </View>
 
@@ -1765,57 +1876,77 @@ function UserRow({
   onDelete,
   onAssignRole,
   onSuspend,
-  selectedRole,
   user,
 }: {
   assigning: boolean;
   onDelete: () => void;
   onAssignRole: (uid: string, role: string) => void;
   onSuspend: () => void;
-  selectedRole: string;
   user: AdminUser;
 }) {
   const currentRole = String(user.rol || '').trim();
   const isPending = !currentRole;
-  const actionLabel = isPending ? selectedRole : 'Editar';
+  const [draftRole, setDraftRole] = useState(currentRole || roleOptions[0]);
+  const [rolePickerOpen, setRolePickerOpen] = useState(false);
+  const actionLabel = rolePickerOpen ? 'Aceptar' : isPending ? 'Seleccionar rol' : 'Editar';
   const accent = getRoleAccent(currentRole);
 
   return (
     <View style={styles.userCard}>
-      <View style={[styles.userIcon, { backgroundColor: `${accent}18` }]}>
-        <MaterialCommunityIcons name="account-outline" size={20} color={accent} />
-      </View>
-      <View style={styles.userCopy}>
-        <Text style={styles.cardTitle}>{user.nombre || 'Usuario Biomind'}</Text>
-        <Text style={styles.cardText}>{user.correo || 'Sin correo'}</Text>
-        <Text style={styles.cardMeta}>ID {user.identificacion || 'Sin identificacion'}</Text>
-        <View style={styles.chipRow}>
-          <Text style={[styles.badge, isPending && styles.warningBadge]}>
-            {currentRole || 'Sin rol'}
-          </Text>
-          <Text style={[styles.badge, styles.verifiedBadge]}>Correo verificado</Text>
+      <View style={styles.userMainRow}>
+        <View style={[styles.userIcon, { backgroundColor: `${accent}18` }]}>
+          <MaterialCommunityIcons name="account-outline" size={20} color={accent} />
+        </View>
+        <View style={styles.userCopy}>
+          <Text style={styles.cardTitle}>{user.nombre || 'Usuario Biomind'}</Text>
+          <Text style={styles.cardText}>{user.correo || 'Sin correo'}</Text>
+          <Text style={styles.cardMeta}>ID {user.identificacion || 'Sin identificacion'}</Text>
+          <View style={styles.chipRow}>
+            <Text style={[styles.badge, isPending && styles.warningBadge]}>
+              {currentRole || 'Sin rol'}
+            </Text>
+            <Text style={[styles.badge, styles.verifiedBadge]}>Correo verificado</Text>
+          </View>
+        </View>
+        <View style={styles.userActions}>
+          <Pressable
+            disabled={assigning}
+            onPress={() => {
+              if (!rolePickerOpen) {
+                setDraftRole(currentRole || roleOptions[0]);
+                setRolePickerOpen(true);
+                return;
+              }
+              onAssignRole(user.id, draftRole);
+              setRolePickerOpen(false);
+            }}
+            style={[styles.smallButton, assigning && styles.smallButtonDisabled]}>
+            {assigning ? (
+              <ActivityIndicator color={palette.surface} size="small" />
+            ) : (
+              <Text style={styles.smallButtonText}>{actionLabel}</Text>
+            )}
+          </Pressable>
+          <View style={styles.userRoundActions}>
+            <Pressable accessibilityLabel="Suspender usuario" onPress={onSuspend} style={styles.iconButton}>
+              <MaterialCommunityIcons name="account-minus-outline" size={18} color={palette.salmonText} />
+            </Pressable>
+            <Pressable accessibilityLabel="Eliminar usuario" onPress={onDelete} style={styles.iconButton}>
+              <MaterialCommunityIcons name="account-remove-outline" size={18} color={palette.salmonText} />
+            </Pressable>
+          </View>
         </View>
       </View>
-      <View style={styles.userActions}>
-        <Pressable
-          disabled={assigning}
-          onPress={() => onAssignRole(user.id, selectedRole)}
-          style={[styles.smallButton, assigning && styles.smallButtonDisabled]}>
-          {assigning ? (
-            <ActivityIndicator color={palette.surface} size="small" />
-          ) : (
-            <Text style={styles.smallButtonText}>{actionLabel}</Text>
-          )}
-        </Pressable>
-        <View style={styles.userRoundActions}>
-          <Pressable accessibilityLabel="Suspender usuario" onPress={onSuspend} style={styles.iconButton}>
-            <MaterialCommunityIcons name="account-minus-outline" size={22} color={palette.salmonText} />
-          </Pressable>
-          <Pressable accessibilityLabel="Eliminar usuario" onPress={onDelete} style={styles.iconButton}>
-            <MaterialCommunityIcons name="account-remove-outline" size={22} color={palette.salmonText} />
-          </Pressable>
+      {rolePickerOpen ? (
+        <View style={styles.inlineRolePicker}>
+          <OptionPicker
+            emptyLabel="Selecciona rol"
+            options={roleOptions.map((role) => ({ label: role, value: role }))}
+            value={draftRole}
+            onChange={setDraftRole}
+          />
         </View>
-      </View>
+      ) : null}
     </View>
   );
 }
@@ -1952,7 +2083,7 @@ function TrimesterSheetCard({
         <TimelineDot label="Fin" value={sheet.trimestreFechaFin || 'Pendiente'} />
       </View>
 
-      <View style={styles.cardActions}>
+      <View style={styles.timelineActions}>
         <Pressable onPress={onEdit} style={styles.ghostButton}>
           <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
           <Text style={styles.ghostButtonText}>{hasTrimester ? 'Editar' : 'Asignar'}</Text>
@@ -2002,18 +2133,20 @@ function ProgramCard({
           <View style={styles.sheetNumberBadge}>
             <MaterialCommunityIcons name="school-outline" size={18} color={palette.primary} />
           </View>
-          <View>
+          <View style={styles.sheetTitleCopy}>
             <Text style={styles.sheetTitle}>{program.codigo || 'Programa'}</Text>
             <Text style={styles.sheetProgram}>{program.nombre || 'Sin nombre'}</Text>
             <Text style={styles.cardMeta}>{program.tipoFormacion || 'Tipo de formación pendiente'}</Text>
           </View>
         </View>
-        <StatusPill label={inactive ? 'Inactivo' : 'Activo'} tone={inactive ? 'danger' : 'success'} />
+        <View style={styles.sheetStatusSlot}>
+          <StatusPill label={inactive ? 'Inactivo' : 'Activo'} tone={inactive ? 'danger' : 'success'} />
+        </View>
       </View>
       {demo ? (
         <Text style={styles.demoHint}>Dato demo: crea un programa para administrarlo.</Text>
       ) : (
-        <View style={styles.cardActions}>
+        <View style={styles.textAlignedActions}>
           <Pressable onPress={onEdit} style={styles.ghostButton}>
             <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
             <Text style={styles.ghostButtonText}>Editar</Text>
@@ -2052,18 +2185,20 @@ function SheetCard({
   const demo = isDemoRecord(sheet.id);
 
   return (
-    <View style={styles.sheetCard}>
+    <View style={styles.sheetCardLoose}>
       <View style={styles.sheetHeader}>
         <View style={styles.sheetTitleRow}>
           <View style={styles.sheetNumberBadge}>
             <Text style={styles.sheetNumberText}>F{index + 1}</Text>
           </View>
-          <View>
+          <View style={styles.sheetTitleCopy}>
             <Text style={styles.sheetTitle}>Ficha {sheet.numero || sheet.id}</Text>
             <Text style={styles.sheetProgram}>{sheet.programaNombre || 'Sin programa asociado'}</Text>
           </View>
         </View>
-        <StatusPill label={inactive ? 'Inactiva' : 'Activa'} tone={inactive ? 'danger' : 'success'} />
+        <View style={styles.sheetStatusSlot}>
+          <StatusPill label={inactive ? 'Inactiva' : 'Activa'} tone={inactive ? 'danger' : 'success'} />
+        </View>
       </View>
       <View style={styles.assignmentBox}>
         <AssignmentLine icon="book-education-outline" label="Programa" value={sheet.programaNombre || 'Pendiente'} />
@@ -2073,7 +2208,7 @@ function SheetCard({
       {demo ? (
         <Text style={styles.demoHint}>Dato demo: crea una ficha real para administrarla.</Text>
       ) : (
-        <View style={styles.cardActions}>
+        <View style={styles.textAlignedActions}>
           <Pressable onPress={onEdit} style={styles.ghostButton}>
             <MaterialCommunityIcons name="pencil-outline" size={16} color={palette.primary} />
             <Text style={styles.ghostButtonText}>Editar</Text>
@@ -2184,6 +2319,7 @@ function SimpleAdminCard({
   onEdit,
   subtitle,
   title,
+  variant = 'default',
 }: {
   inactive?: boolean;
   onActivate?: () => void;
@@ -2191,9 +2327,10 @@ function SimpleAdminCard({
   onEdit?: () => void;
   subtitle: string;
   title: string;
+  variant?: 'default' | 'loose';
 }) {
   return (
-    <View style={styles.sheetCard}>
+    <View style={[styles.sheetCard, variant === 'loose' && styles.sheetCardLoose]}>
       <View style={styles.sheetHeader}>
         <View style={styles.userCopy}>
           <Text style={styles.sheetTitle}>{title}</Text>
@@ -2240,14 +2377,24 @@ function ScrollableAdminList({
   placeholder: string;
   search: string;
 }) {
-  const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
+  const items = Children.toArray(children)
+    .filter(Boolean)
+    .map((child) =>
+      typeof child === 'string' || typeof child === 'number'
+        ? <Text style={styles.cardText}>{child}</Text>
+        : child
+    );
 
   return (
     <View style={styles.adminListBlock}>
       <SearchField placeholder={placeholder} value={search} onChangeText={onSearchChange} />
       {items.length ? (
-        <ScrollView nestedScrollEnabled style={styles.adminListScroll} contentContainerStyle={styles.adminListContent}>
-          {items}
+        <ScrollView nestedScrollEnabled contentContainerStyle={styles.adminListContent} style={items.length > 3 ? styles.adminListScroll : undefined}>
+          {items.map((item, index) => (
+            <View key={`admin-list-item-${index}`}>
+              <SafeNode node={item} />
+            </View>
+          ))}
         </ScrollView>
       ) : (
         <FeedbackBox icon="magnify-close" text={emptyText} tone="info" />
@@ -2295,6 +2442,46 @@ function RelationGroup({
             </View>
           )) : <Text style={styles.cardText}>No hay resultados para esa búsqueda.</Text>}
         </ScrollView>
+      ) : <Text style={styles.cardText}>{emptyText}</Text>}
+    </View>
+  );
+}
+
+function AssignmentSummaryGroup({
+  emptyText,
+  rows,
+}: {
+  emptyText: string;
+  rows: {
+    id: string;
+    competence: AcademicCompetence;
+    instructor: AdminUser;
+    raps: LearningResult[];
+  }[];
+}) {
+  return (
+    <View style={styles.relationGroup}>
+      <Text style={styles.relationGroupTitle}>Competencias y RAP asignados</Text>
+      {rows.length ? (
+        <View style={styles.summaryAssignmentList}>
+          {rows.map((row) => (
+            <View key={`summary-assignment-${row.id}`} style={styles.summaryAssignmentCard}>
+              <Text style={styles.cardMeta}>
+                {row.competence.codigo ? `${row.competence.codigo} - ` : ''}{row.competence.nombre || 'Competencia sin nombre'}
+              </Text>
+              <Text style={styles.cardText}>
+                Instructor: {row.instructor.nombre || row.instructor.correo || 'Sin instructor'}
+              </Text>
+              {row.raps?.length ? row.raps.map((rap) => (
+                <Text key={`${row.id}-${rap.id}`} style={styles.summaryRapText}>
+                  {rap.codigo ? `${rap.codigo}: ` : ''}{rap.descripcion || 'Resultado de aprendizaje'}
+                </Text>
+              )) : (
+                <Text style={styles.cardText}>Sin RAP activo asociado.</Text>
+              )}
+            </View>
+          ))}
+        </View>
       ) : <Text style={styles.cardText}>{emptyText}</Text>}
     </View>
   );
@@ -2519,7 +2706,7 @@ function OptionPicker({
               {value === option.value ? (
                 <MaterialCommunityIcons name="check-circle" size={16} color={palette.dark} />
               ) : null}
-              <Text style={[styles.optionChipText, value === option.value && styles.optionChipTextActive]}>
+              <Text numberOfLines={1} style={[styles.optionChipText, value === option.value && styles.optionChipTextActive]}>
                 {index + 1}. {option.label}
               </Text>
             </Pressable>
@@ -2610,15 +2797,35 @@ function PageTitle({ icon, subtitle, title }: { icon: AdminIconName; subtitle: s
 }
 
 function Section({ children, subtitle, title }: { children: ReactNode; subtitle: string; title: string }) {
+  const safeChildren = Children.toArray(children).map((child) =>
+    typeof child === 'string' || typeof child === 'number'
+      ? <Text style={styles.cardText}>{child}</Text>
+      : child
+  );
+
   return (
     <View style={styles.sectionBlock}>
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>{title}</Text>
         <Text style={styles.sectionSubtitle}>{subtitle}</Text>
       </View>
-      <View style={styles.stack}>{children}</View>
+      <View style={styles.stack}>
+        {safeChildren.map((child, index) => (
+          <View key={`section-child-${index}`}>
+            <SafeNode node={child} />
+          </View>
+        ))}
+      </View>
     </View>
   );
+}
+
+function SafeNode({ node }: { node: ReactNode }) {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return <Text style={styles.cardText}>{node}</Text>;
+  }
+
+  return <>{node}</>;
 }
 
 function ActionRow({ icon, onPress, text }: { icon: AdminIconName; onPress?: () => void; text: string }) {
@@ -2668,15 +2875,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
   },
   scrollContent: {
-    gap: 0,
+    gap: 4,
     paddingHorizontal: 20,
   },
   headerCard: {
     backgroundColor: palette.background,
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
     marginHorizontal: -20,
-    paddingBottom: 20,
+    paddingBottom: 22,
     paddingHorizontal: 28,
     paddingTop: 20,
   },
@@ -2700,7 +2907,9 @@ const styles = StyleSheet.create({
   rolePill: {
     alignItems: 'center',
     backgroundColor: palette.soft,
+    borderColor: palette.border,
     borderRadius: 999,
+    borderWidth: 1,
     flexDirection: 'row',
     gap: 6,
     paddingHorizontal: 11,
@@ -2735,14 +2944,14 @@ const styles = StyleSheet.create({
   },
   metricsRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
     marginHorizontal: -20,
     paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingVertical: 16,
   },
   metricCard: {
     backgroundColor: palette.surface,
-    borderRadius: 12,
+    borderRadius: 16,
     flex: 1,
     gap: 6,
     minHeight: 94,
@@ -2768,11 +2977,11 @@ const styles = StyleSheet.create({
     lineHeight: 13,
   },
   sectionBlock: {
-    backgroundColor: '#F4F5F4',
-    gap: 12,
+    backgroundColor: '#F8F6F1',
+    gap: 16,
     marginHorizontal: -20,
     paddingHorizontal: 20,
-    paddingVertical: 18,
+    paddingVertical: 20,
   },
   sectionHeader: {
     gap: 2,
@@ -2799,8 +3008,8 @@ const styles = StyleSheet.create({
   },
   quickAction: {
     backgroundColor: palette.soft,
-    borderColor: 'transparent',
-    borderRadius: 14,
+    borderColor: palette.border,
+    borderRadius: 16,
     borderWidth: 1,
     flexBasis: '47%',
     flexGrow: 1,
@@ -2834,6 +3043,52 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
   },
+  adminNewsList: {
+    gap: 10,
+  },
+  adminNewsCard: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderColor: palette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 14,
+  },
+  adminNewsIcon: {
+    alignItems: 'center',
+    borderRadius: 20,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  adminNewsCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  adminNewsTitle: {
+    color: palette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  adminNewsText: {
+    color: palette.muted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  adminNewsValueWrap: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 2,
+  },
+  adminNewsValue: {
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 18,
+    lineHeight: 22,
+  },
   flowGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2843,7 +3098,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     backgroundColor: palette.surface,
     borderColor: palette.border,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     flexBasis: '31%',
     flexGrow: 1,
@@ -2875,7 +3130,7 @@ const styles = StyleSheet.create({
     marginHorizontal: -20,
   },
   pageTopBand: {
-    backgroundColor: '#ECECEC',
+    backgroundColor: '#EEE8DC',
     height: 48,
   },
   pageTitle: {
@@ -2917,7 +3172,7 @@ const styles = StyleSheet.create({
   segment: {
     alignItems: 'center',
     backgroundColor: palette.soft,
-    borderRadius: 999,
+    borderRadius: 16,
     minHeight: 34,
     justifyContent: 'center',
     paddingHorizontal: 15,
@@ -2934,13 +3189,17 @@ const styles = StyleSheet.create({
     color: palette.surface,
   },
   userCard: {
-    alignItems: 'center',
     backgroundColor: palette.surface,
-    borderRadius: 20,
-    borderWidth: 0,
+    borderColor: palette.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 12,
+    padding: 16,
+  },
+  userMainRow: {
+    alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
-    padding: 15,
   },
   userIcon: {
     alignItems: 'center',
@@ -2955,11 +3214,19 @@ const styles = StyleSheet.create({
   },
   userActions: {
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
+    width: 116,
+  },
+  inlineRolePicker: {
+    backgroundColor: palette.soft,
+    borderRadius: 14,
+    padding: 4,
+    width: '100%',
   },
   userRoundActions: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
+    justifyContent: 'center',
   },
   cardTitle: {
     color: palette.dark,
@@ -2993,7 +3260,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 4,
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 5,
   },
   warningBadge: {
     backgroundColor: '#FFF0E8',
@@ -3007,9 +3274,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: palette.primary,
     borderRadius: 999,
+    justifyContent: 'center',
+    minHeight: 34,
     minWidth: 72,
-    paddingHorizontal: 13,
-    paddingVertical: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
   smallButtonDisabled: {
     opacity: 0.72,
@@ -3018,20 +3287,23 @@ const styles = StyleSheet.create({
     color: palette.surface,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 11,
+    lineHeight: 14,
+    textAlign: 'center',
   },
   iconButton: {
     alignItems: 'center',
     backgroundColor: palette.salmon,
     borderRadius: 999,
-    height: 42,
+    height: 34,
     justifyContent: 'center',
-    width: 42,
+    width: 34,
   },
   permissionRow: {
     alignItems: 'center',
     backgroundColor: palette.surface,
-    borderRadius: 20,
-    borderWidth: 0,
+    borderColor: palette.border,
+    borderRadius: 18,
+    borderWidth: 1,
     flexDirection: 'row',
     gap: 12,
     padding: 16,
@@ -3072,11 +3344,31 @@ const styles = StyleSheet.create({
   },
   sheetCard: {
     backgroundColor: palette.surface,
-    borderRadius: 24,
-    borderWidth: 0,
+    borderRadius: 18,
     gap: 13,
+    marginHorizontal: 12,
     paddingHorizontal: 18,
     paddingVertical: 18,
+  },
+  sheetCardLoose: {
+    backgroundColor: palette.surface,
+    borderRadius: 18,
+    elevation: 1,
+    gap: 14,
+    marginHorizontal: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    shadowColor: palette.shadow,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.10,
+    shadowRadius: 10,
+  },
+  summaryCard: {
+    backgroundColor: palette.surface,
+    borderRadius: 18,
+    gap: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
   },
   sheetHeader: {
     alignItems: 'flex-start',
@@ -3086,8 +3378,19 @@ const styles = StyleSheet.create({
   },
   sheetTitleRow: {
     alignItems: 'center',
+    flex: 1,
     flexDirection: 'row',
     gap: 13,
+    minWidth: 0,
+  },
+  sheetTitleCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sheetStatusSlot: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    maxWidth: 88,
   },
   sheetNumberBadge: {
     alignItems: 'center',
@@ -3110,6 +3413,7 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsSemiBold',
     fontSize: 15,
     lineHeight: 20,
+    maxWidth: '100%',
   },
   sheetProgram: {
     color: '#9FB3A0',
@@ -3117,35 +3421,49 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 17,
-    maxWidth: 240,
+    maxWidth: '100%',
   },
   sheetStats: {
     flexDirection: 'row',
     gap: 8,
     paddingLeft: 49,
   },
-  miniStat: {
-    backgroundColor: palette.soft,
-    borderRadius: 999,
-    flex: 0,
+  summaryStatsRow: {
     flexDirection: 'row',
-    gap: 7,
-    minHeight: 30,
-    minWidth: 84,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    flexWrap: 'nowrap',
+    gap: 6,
+  },
+  miniStat: {
+    alignItems: 'center',
+    backgroundColor: palette.soft,
+    borderRadius: 14,
+    flex: 1,
+    gap: 2,
+    justifyContent: 'center',
+    minHeight: 58,
+    minWidth: 0,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
   },
   miniStatValue: {
     color: palette.primary,
     fontFamily: 'PoppinsSemiBold',
-    fontSize: 12,
-    lineHeight: 14,
+    fontSize: 16,
+    lineHeight: 18,
+    textAlign: 'center',
   },
   miniStatLabel: {
     color: palette.muted,
     fontFamily: 'PoppinsMedium',
-    fontSize: 10,
-    lineHeight: 13,
+    fontSize: 9,
+    lineHeight: 12,
+    textAlign: 'center',
+  },
+  textAlignedActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingLeft: 53,
   },
   assignmentBox: {
     gap: 7,
@@ -3177,8 +3495,9 @@ const styles = StyleSheet.create({
   },
   academicCard: {
     backgroundColor: palette.surface,
-    borderRadius: 14,
-    borderWidth: 0,
+    borderColor: palette.border,
+    borderRadius: 16,
+    borderWidth: 1,
     flexBasis: '47%',
     flexGrow: 1,
     gap: 9,
@@ -3194,14 +3513,36 @@ const styles = StyleSheet.create({
   },
   formCard: {
     backgroundColor: palette.surface,
-    borderRadius: 20,
+    borderRadius: 18,
     gap: 12,
-    padding: 16,
+    marginHorizontal: -20,
+    padding: 28,
   },
   formHint: {
     color: palette.primary,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 13,
+  },
+  rapFormHeader: {
+    borderLeftColor: palette.primary,
+    borderLeftWidth: 3,
+    gap: 2,
+    marginBottom: 2,
+    paddingLeft: 12,
+    paddingVertical: 2,
+  },
+  rapFormEyebrow: {
+    color: palette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 10,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  rapFormTitle: {
+    color: palette.dark,
+    fontFamily: 'SulphurPointBold',
+    fontSize: 27,
+    lineHeight: 28,
   },
   assignmentStep: {
     alignItems: 'center',
@@ -3345,15 +3686,15 @@ const styles = StyleSheet.create({
   },
   optionSelectButton: {
     alignItems: 'center',
-    backgroundColor: '#F6F8F6',
-    borderColor: '#DDE8E2',
+    backgroundColor: palette.soft,
+    borderColor: palette.border,
     borderRadius: 14,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 10,
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
   optionSelectText: {
     color: palette.ink,
@@ -3367,7 +3708,7 @@ const styles = StyleSheet.create({
   },
   optionDropdown: {
     backgroundColor: palette.surface,
-    borderColor: '#DDE8E2',
+    borderColor: palette.border,
     borderRadius: 16,
     borderWidth: 1,
     gap: 8,
@@ -3376,8 +3717,8 @@ const styles = StyleSheet.create({
   },
   optionSearchBox: {
     alignItems: 'center',
-    backgroundColor: '#F6F8F6',
-    borderRadius: 999,
+    backgroundColor: palette.soft,
+    borderRadius: 14,
     flexDirection: 'row',
     gap: 8,
     paddingHorizontal: 12,
@@ -3403,8 +3744,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   multiSelectChip: {
-    backgroundColor: '#F6F8F6',
-    borderColor: '#DDE8E2',
+    backgroundColor: palette.soft,
+    borderColor: palette.border,
     borderRadius: 16,
     borderWidth: 1,
     flexBasis: '47%',
@@ -3433,24 +3774,25 @@ const styles = StyleSheet.create({
   },
   optionChip: {
     alignItems: 'center',
-    backgroundColor: '#F6F8F6',
-    borderColor: '#DDE8E2',
+    backgroundColor: palette.soft,
+    borderColor: palette.border,
     borderRadius: 12,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 7,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 8,
   },
   optionChipActive: {
     backgroundColor: palette.surface,
-    borderColor: palette.dark,
-    borderWidth: 2,
+    borderColor: palette.primary,
   },
   optionChipText: {
     color: palette.ink,
+    flex: 1,
     fontFamily: 'PoppinsMedium',
     fontSize: 11,
+    lineHeight: 15,
   },
   optionChipTextActive: {
     color: palette.dark,
@@ -3459,8 +3801,8 @@ const styles = StyleSheet.create({
   searchBox: {
     alignItems: 'center',
     backgroundColor: palette.surface,
-    borderColor: '#E4EEE9',
-    borderRadius: 999,
+    borderColor: palette.border,
+    borderRadius: 14,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 8,
@@ -3481,18 +3823,18 @@ const styles = StyleSheet.create({
   },
   sectionNavChip: {
     alignItems: 'center',
-    backgroundColor: '#FDFBF6',
-    borderColor: '#E4EEE9',
+    backgroundColor: palette.soft,
+    borderColor: palette.border,
     borderRadius: 999,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 7,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 8,
   },
   sectionNavChipActive: {
-    backgroundColor: '#E8F8DF',
-    borderColor: '#9DD89F',
+    backgroundColor: palette.greenSoft,
+    borderColor: palette.green,
   },
   sectionNavIcon: {
     alignItems: 'center',
@@ -3519,7 +3861,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   relationGroup: {
-    backgroundColor: '#F8F8F8',
+    backgroundColor: '#F8F6F1',
     borderRadius: 14,
     gap: 8,
     padding: 12,
@@ -3554,25 +3896,43 @@ const styles = StyleSheet.create({
     gap: 8,
     padding: 10,
   },
+  summaryAssignmentList: {
+    gap: 8,
+  },
+  summaryAssignmentCard: {
+    backgroundColor: palette.surface,
+    borderColor: palette.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 5,
+    padding: 10,
+  },
+  summaryRapText: {
+    color: palette.ink,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+    lineHeight: 15,
+  },
   statusPill: {
     borderRadius: 999,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 10,
+    lineHeight: 13,
+    maxWidth: 86,
     overflow: 'hidden',
     paddingHorizontal: 10,
-    paddingVertical: 6,
-
+    paddingVertical: 5,
+    textAlign: 'center',
   },
   cardActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    paddingLeft: 49,
   },
   ghostButton: {
     alignItems: 'center',
     backgroundColor: palette.soft,
-    borderRadius: 999,
+    borderRadius: 16,
     flexDirection: 'row',
     gap: 6,
     paddingHorizontal: 12,
@@ -3586,7 +3946,7 @@ const styles = StyleSheet.create({
   dangerButton: {
     alignItems: 'center',
     backgroundColor: palette.salmon,
-    borderRadius: 999,
+    borderRadius: 16,
     flexDirection: 'row',
     gap: 6,
     paddingHorizontal: 12,
@@ -3608,7 +3968,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: palette.surface,
     borderColor: palette.mint,
-    borderRadius: 22,
+    borderRadius: 18,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 12,
@@ -3617,8 +3977,9 @@ const styles = StyleSheet.create({
   actionRow: {
     alignItems: 'center',
     backgroundColor: palette.surface,
-    borderRadius: 22,
-    borderWidth: 0,
+    borderColor: palette.border,
+    borderRadius: 18,
+    borderWidth: 1,
     flexDirection: 'row',
     gap: 12,
     minHeight: 62,
@@ -3633,8 +3994,7 @@ const styles = StyleSheet.create({
   },
   trimesterCard: {
     backgroundColor: palette.surface,
-    borderRadius: 24,
-    borderWidth: 0,
+    borderRadius: 18,
     gap: 14,
     paddingHorizontal: 18,
     paddingVertical: 18,
@@ -3680,6 +4040,12 @@ const styles = StyleSheet.create({
     gap: 9,
     paddingLeft: 49,
   },
+  timelineActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingLeft: 49,
+  },
   timelineItem: {
     alignItems: 'center',
     backgroundColor: palette.soft,
@@ -3709,7 +4075,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: palette.surface,
     borderColor: palette.border,
-    borderRadius: 20,
+    borderRadius: 18,
     borderWidth: 1,
     gap: 10,
     padding: 20,
@@ -3717,12 +4083,12 @@ const styles = StyleSheet.create({
   adminProfileCard: {
     backgroundColor: palette.surface,
     elevation: 3,
-    gap: 12,
+    gap: 8,
     marginHorizontal: -30,
     paddingHorizontal: 40,
     paddingTop: 30,
     paddingVertical: 20,
-    shadowColor: palette.dark,
+    shadowColor: palette.shadow,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
     shadowRadius: 8,
@@ -3736,7 +4102,7 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   profileTopBand: {
-    backgroundColor: '#ECECEC',
+    backgroundColor: '#EEE8DC',
     height: 48,
   },
   adminProfilePanel: {
@@ -3749,7 +4115,7 @@ const styles = StyleSheet.create({
     paddingTop: 34,
   },
   profileBottomBand: {
-    backgroundColor: '#F3F3F3',
+    backgroundColor: '#F5F3EE',
     height: 128,
   },
   adminAvatarWrap: {
@@ -3760,38 +4126,38 @@ const styles = StyleSheet.create({
   changePhotoButton: {
     backgroundColor: palette.soft,
     borderRadius: 999,
-    paddingHorizontal: 15,
+    paddingHorizontal: 14,
     paddingVertical: 8,
   },
   changePhotoText: {
     color: palette.primary,
     fontFamily: 'PoppinsSemiBold',
-    fontSize: 11,
+    fontSize: 12,
   },
   adminForm: {
     gap: 10,
-    maxWidth: 330,
+    maxWidth: 420,
     width: '100%',
   },
   profileFieldBlock: {
-    gap: 9,
+    gap: 6,
   },
   profileFieldLabel: {
-    color: palette.dark,
+    color: palette.ink,
     fontFamily: 'PoppinsSemiBold',
-    fontSize: 11,
+    fontSize: 12,
   },
   profileInput: {
-    backgroundColor: '#FBFBFB',
-    borderColor: '#CFCFCF',
-    borderRadius: 999,
+    backgroundColor: '#fbfbfb',
+    borderColor: '#d2d2d2',
+    borderRadius: 100,
     borderWidth: 1,
     color: palette.ink,
     fontFamily: 'PoppinsRegular',
     fontSize: 13,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    shadowColor: palette.dark,
+    shadowColor: palette.ink,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 6,
@@ -3801,23 +4167,27 @@ const styles = StyleSheet.create({
     borderColor: palette.primary,
     shadowColor: palette.primary,
     shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
   },
   profileInputMuted: {
-    backgroundColor: '#E7E7E7',
+    backgroundColor: '#ececec',
     color: palette.muted,
   },
   profileButtonRow: {
     alignItems: 'center',
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 10,
     justifyContent: 'center',
-    marginTop: 3,
+    marginTop: 10,
   },
   saveProfileButton: {
+    alignItems: 'center',
     backgroundColor: palette.primary,
     borderRadius: 999,
-    paddingHorizontal: 20,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
   saveProfileText: {
@@ -3864,7 +4234,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     flexDirection: 'row',
     gap: 6,
-    paddingHorizontal: 20,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
     paddingVertical: 12,
   },
   signOutText: {
@@ -3913,13 +4284,14 @@ const styles = StyleSheet.create({
   },
   tabBarWrap: {
     backgroundColor: palette.surface,
-    borderBottomColor: palette.academicLine,
-    borderBottomWidth: 1,
     marginHorizontal: -20,
+    marginTop: -3,
+    paddingTop: 4,
   },
   tabBarContent: {
-    gap: 22,
+    gap: 18,
     paddingHorizontal: 28,
+    paddingTop: 2,
   },
   tabItem: {
     alignItems: 'center',
@@ -3954,11 +4326,11 @@ const styles = StyleSheet.create({
   tabUnderline: {
     backgroundColor: 'transparent',
     borderRadius: 2,
-    height: 3,
-    width: '100%',
+    height: 1,
+    width: 24,
   },
   tabUnderlineActive: {
-    backgroundColor: palette.primary,
+    backgroundColor: `${palette.primary}3D`,
   },
   metricCardEmpty: {
     backgroundColor: '#EFEFEC',
@@ -3967,4 +4339,3 @@ const styles = StyleSheet.create({
     color: palette.muted,
   },
 });
-

@@ -63,7 +63,7 @@ export function StatusBadge({
   soft?: string;
 }) {
   return (
-    <View style={[styles.statusBadge, { backgroundColor: soft ?? `${accent}1F` }]}>
+    <View style={[styles.statusBadge, { backgroundColor: soft || `${accent}1F` }]}>
       <Text style={[styles.statusBadgeText, { color: accent }]}>{label}</Text>
     </View>
   );

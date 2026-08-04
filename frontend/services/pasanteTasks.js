@@ -1,16 +1,19 @@
 import {
-  addDoc,
   collection,
   deleteDoc,
   doc,
   onSnapshot,
   query,
+  setDoc,
   updateDoc,
   where,
 } from 'firebase/firestore';
 import { db } from './firebase';
 
 const TASKS_COLLECTION = 'tareasPasante';
+const TASK_FILES_BUCKET = process.env.EXPO_PUBLIC_EVIDENCE_FILES_BUCKET
+  || process.env.EXPO_PUBLIC_PROJECT_FILES_BUCKET
+  || 'biomind-project-files';
 
 function now() {
   return new Date();
@@ -18,6 +21,99 @@ function now() {
 
 function cleanText(value) {
   return String(value || '').trim();
+}
+
+function getExternalFilesStorageConfig() {
+  const supabaseUrl = cleanText(process.env.EXPO_PUBLIC_SUPABASE_URL).replace(/\/+$/g, '');
+  const supabaseAnonKey = cleanText(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error(
+      'Falta configurar el almacenamiento externo de archivos. Agrega EXPO_PUBLIC_SUPABASE_URL y EXPO_PUBLIC_SUPABASE_ANON_KEY para subir adjuntos de tareas.'
+    );
+  }
+
+  return { supabaseAnonKey, supabaseUrl };
+}
+
+function isPublicUrl(uri) {
+  return /^https:\/\//i.test(uri);
+}
+
+function safeFileName(name, fallback = 'archivo') {
+  const normalized = cleanText(name)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return normalized || fallback;
+}
+
+async function uploadTaskAttachment(archivo, taskId, index) {
+  const nombre = cleanText(archivo.nombre) || `adjunto-${index + 1}`;
+  const source = cleanText(archivo.uri || archivo.url);
+  const mimeType = cleanText(archivo.mimeType) || 'application/octet-stream';
+  const ruta = cleanText(archivo.ruta);
+
+  if (!source) {
+    return null;
+  }
+
+  if (isPublicUrl(source)) {
+    return {
+      nombre,
+      mimeType,
+      ruta: ruta || null,
+      uri: source,
+      url: source,
+    };
+  }
+
+  const response = await fetch(source);
+
+  if (!response.ok) {
+    throw new Error(`No pudimos leer el adjunto ${nombre}. Intenta seleccionarlo nuevamente.`);
+  }
+
+  const { supabaseAnonKey, supabaseUrl } = getExternalFilesStorageConfig();
+  const blob = await response.blob();
+  const path = `tareas-pasante/${taskId}/${Date.now()}-${index}-${safeFileName(nombre)}`;
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/${TASK_FILES_BUCKET}/${path}`;
+  const uploadResponse = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${supabaseAnonKey}`,
+      'Content-Type': mimeType,
+    },
+    body: blob,
+  });
+
+  if (!uploadResponse.ok) {
+    let detail = '';
+
+    try {
+      const responseBody = await uploadResponse.json();
+      detail = responseBody.message || responseBody.error || '';
+    } catch {
+      detail = await uploadResponse.text();
+    }
+
+    throw new Error(
+      `No pudimos subir el adjunto de la tarea a Supabase (${uploadResponse.status}). ${detail || 'Revisa el bucket y las políticas de Supabase.'}`
+    );
+  }
+
+  const url = `${supabaseUrl}/storage/v1/object/public/${TASK_FILES_BUCKET}/${path}`;
+
+  return {
+    nombre,
+    mimeType,
+    ruta: path,
+    uri: url,
+    url,
+  };
 }
 
 function mapSnapshot(snapshot) {
@@ -80,9 +176,16 @@ export async function guardarTareaPasante(task) {
     throw new Error('Selecciona un pasante y escribe el título de la tarea.');
   }
 
+  const taskRef = task.id ? doc(db, TASKS_COLLECTION, task.id) : doc(collection(db, TASKS_COLLECTION));
+  const archivosBase = Array.isArray(task.archivos) ? task.archivos.filter(Boolean) : [];
+  const archivos = (await Promise.all(
+    archivosBase.map((archivo, index) => uploadTaskAttachment(archivo, taskRef.id, index))
+  )).filter(Boolean);
+
   const payload = {
     titulo,
     descripcion,
+    archivos,
     fichaId: cleanText(task.fichaId),
     fichaNumero: cleanText(task.fichaNumero),
     proyectoId: cleanText(task.proyectoId),
@@ -97,11 +200,11 @@ export async function guardarTareaPasante(task) {
   };
 
   if (task.id) {
-    await updateDoc(doc(db, TASKS_COLLECTION, task.id), payload);
+    await updateDoc(taskRef, payload);
     return;
   }
 
-  await addDoc(collection(db, TASKS_COLLECTION), {
+  await setDoc(taskRef, {
     ...payload,
     estado: 'Pendiente',
     validadaPorInstructor: false,

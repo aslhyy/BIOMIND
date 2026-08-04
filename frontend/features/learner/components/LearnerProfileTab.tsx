@@ -1,7 +1,11 @@
 import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { actualizarPerfilUsuario } from '@/services/auth';
+// @ts-ignore
+import { escucharContextoAcademicoUsuario, escucharFichas, escucharGruposTrabajo, escucharProyectos, solicitarFichaAprendiz } from '@/services/academic';
+// @ts-ignore
+import { escucharBitacoras } from '@/services/bitacoras';
 import { learnerPalette } from '@/features/learner/theme';
 import { ProgressBar, SectionHeading } from '@/features/learner/components/LearnerUI';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
@@ -30,16 +34,90 @@ export function LearnerProfileTab({
   onVoiceSuggestionsChange,
 }: LearnerProfileTabProps) {
   const [name, setName] = useState(session.name);
+  const [email, setEmail] = useState(session.email);
   const [photoUri, setPhotoUri] = useState(session.photoUrl || '');
   const [photoBase64, setPhotoBase64] = useState('');
   const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
   const [saving, setSaving] = useState(false);
+  const [fichas, setFichas] = useState<{ id: string; numero: string; programaNombre: string; activo: boolean; estado: string }[]>([]);
+  const [contextFichas, setContextFichas] = useState<{ id?: string; numero?: string }[]>([]);
+  const [groups, setGroups] = useState<{ id: string; fichaId?: string; fichaNumero?: string; aprendizIds?: string[] }[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [bitacoras, setBitacoras] = useState<any[]>([]);
+  const [selectedFichaId, setSelectedFichaId] = useState('');
   const [feedback, setFeedback] = useState('');
 
   useEffect(() => {
     setName(session.name);
+    setEmail(session.email);
     setPhotoUri(session.photoUrl || '');
-  }, [session.name, session.photoUrl]);
+  }, [session.email, session.name, session.photoUrl]);
+
+  useEffect(() => {
+    const unsubscribe = escucharFichas(
+      (items: any[]) => setFichas(items.filter((ficha) => ficha.activo !== false && ficha.estado !== 'Inactiva')),
+      () => setFeedback('No pudimos cargar las fichas disponibles.')
+    );
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const handleError = () => setFeedback('No pudimos cargar tu progreso académico.');
+    const unsubscribeContext = escucharContextoAcademicoUsuario(
+      session,
+      (nextContext: any) => setContextFichas(nextContext.fichas || []),
+      handleError
+    );
+    const unsubscribeGroups = escucharGruposTrabajo(setGroups, handleError);
+    const unsubscribeProjects = escucharProyectos(setProjects, handleError);
+    const unsubscribeBitacoras = escucharBitacoras(setBitacoras, handleError);
+
+    return () => {
+      unsubscribeContext?.();
+      unsubscribeGroups?.();
+      unsubscribeProjects?.();
+      unsubscribeBitacoras?.();
+    };
+  }, [session]);
+
+  const realProgress = useMemo(() => {
+    const liveSheet = contextFichas[0];
+    const sheetKeys = new Set((liveSheet ? [liveSheet.id, liveSheet.numero] : [session.fichaId, session.ficha])
+      .filter(Boolean)
+      .map(String));
+    const learnerGroupIds = new Set(groups
+      .filter((group) =>
+        (group.aprendizIds || []).includes(session.uid)
+        && (sheetKeys.has(String(group.fichaId || '')) || sheetKeys.has(String(group.fichaNumero || '')))
+      )
+      .map((group) => group.id));
+    const assignedProjects = projects.filter((project) => {
+      if (!project.id || project.activo === false || project.estado === 'Inactivo') return false;
+      const belongsToSheet = sheetKeys.has(String(project.fichaId || '')) || sheetKeys.has(String(project.fichaNumero || ''));
+      if (!belongsToSheet) return false;
+      if (project.asignacionTipo === 'grupo' || project.grupoId) {
+        return Boolean(project.grupoId && learnerGroupIds.has(project.grupoId));
+      }
+      return true;
+    });
+
+    if (!assignedProjects.length) return 0;
+
+    const progressTotal = assignedProjects.reduce((total, project) => {
+      const projectLogs = bitacoras.filter((bitacora) => {
+        if (bitacora.proyectoId !== project.id) return false;
+        if (project.asignacionTipo === 'grupo' || project.grupoId) return Boolean(project.grupoId && learnerGroupIds.has(project.grupoId));
+        return bitacora.aprendizUid === session.uid;
+      });
+      const expected = Number(project.bitacorasEsperadas || 0);
+      const progress = expected > 0
+        ? Math.round((projectLogs.length / expected) * 100)
+        : Number(project.progreso || 0);
+      return total + Math.max(0, Math.min(100, Number.isFinite(progress) ? progress : 0));
+    }, 0);
+
+    return Math.round(progressTotal / assignedProjects.length);
+  }, [bitacoras, contextFichas, groups, projects, session.ficha, session.fichaId, session.uid]);
 
   const pickProfilePhoto = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -79,12 +157,17 @@ export function LearnerProfileTab({
       setFeedback('Falta el nombre. Ingresa tu nombre antes de guardar el perfil.');
       return;
     }
+    if (!email.trim()) {
+      setFeedback('Ingresa un correo válido antes de guardar.');
+      return;
+    }
 
     setSaving(true);
     setFeedback('');
 
     try {
       const updatedProfile = await actualizarPerfilUsuario({
+        correo: email,
         nombre: name,
         fotoPerfilBase64: photoBase64 || undefined,
         fotoPerfilMimeType: photoBase64 ? photoMimeType : undefined,
@@ -97,6 +180,35 @@ export function LearnerProfileTab({
     } catch (error) {
       const typedError = error as { message?: string };
       setFeedback(typedError?.message || 'No pudimos actualizar tu perfil.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const requestFicha = async () => {
+    const ficha = fichas.find((item) => item.id === selectedFichaId);
+
+    if (!ficha) {
+      setFeedback('Selecciona una ficha para solicitar inscripción.');
+      return;
+    }
+
+    if (session.fichaId && ficha.id === session.fichaId) {
+      setFeedback('Ya perteneces a esa ficha. Selecciona una ficha diferente para solicitar cambio.');
+      return;
+    }
+
+    setSaving(true);
+    setFeedback('');
+
+    try {
+      await solicitarFichaAprendiz({ aprendizUid: session.uid, ficha });
+      setFeedback(session.fichaId
+        ? 'Solicitud de cambio enviada. El instructor de la nueva ficha debe aprobarla.'
+        : 'Solicitud enviada. Tu instructor debe darte de alta para activar la ficha.');
+    } catch (error) {
+      const typedError = error as { message: string };
+      setFeedback(typedError.message || 'No pudimos enviar la solicitud de ficha.');
     } finally {
       setSaving(false);
     }
@@ -116,7 +228,7 @@ export function LearnerProfileTab({
 
         <View style={styles.formStack}>
           <Field label="Nombre" value={name} onChangeText={setName} />
-          <Field label="Correo" value={session.email} editable={false} />
+          <Field label="Correo" value={email} onChangeText={setEmail} />
           <Field
             label="Programa"
             value={session.programa || 'Aún no tienes programa asignado por el administrador.'}
@@ -136,12 +248,51 @@ export function LearnerProfileTab({
           />
         </View>
 
+        {true ? (
+          <View style={styles.fichaRequestCard}>
+            <Text style={styles.fichaRequestTitle}>{session.fichaId ? 'Solicitar cambio de ficha' : 'Solicitar ficha'}</Text>
+            <Text style={styles.fichaRequestText}>
+              Elige una ficha creada por administración. El instructor responsable debe aprobar tu alta.
+            </Text>
+            {session.fichaSolicitudId ? (
+              <View style={styles.pendingRequestBox}>
+                <Text style={styles.pendingRequestText}>
+                  Solicitud pendiente: Ficha {session.fichaSolicitudNumero || session.fichaSolicitudId}
+                </Text>
+              </View>
+            ) : null}
+            <View style={styles.fichaOptions}>
+              {fichas.map((ficha) => {
+                const active = ficha.id === selectedFichaId;
+                const current = session.fichaId === ficha.id;
+                return (
+                  <Pressable
+                    disabled={current}
+                    key={ficha.id}
+                    onPress={() => setSelectedFichaId(ficha.id)}
+                    style={[styles.fichaChip, active && styles.fichaChipActive, current && styles.fichaChipCurrent]}>
+                    <Text style={[styles.fichaChipText, active && styles.fichaChipTextActive]}>
+                      Ficha {ficha.numero || ficha.id}
+                    </Text>
+                    <Text style={[styles.fichaChipMeta, active && styles.fichaChipTextActive]}>
+                      {current ? 'Ficha actual' : ficha.programaNombre || 'Programa pendiente'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable disabled={saving} onPress={requestFicha} style={styles.requestFichaButton}>
+              <Text style={styles.requestFichaText}>{session.fichaId ? 'Solicitar cambio' : 'Solicitar alta'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <View style={styles.progressBlock}>
           <View style={styles.progressHeader}>
             <Text style={styles.progressTitle}>Progreso académico</Text>
-            <Text style={styles.progressValue}>60%</Text>
+            <Text style={styles.progressValue}>{realProgress}%</Text>
           </View>
-          <ProgressBar accent={learnerPalette.primary} progress={60} soft="#EAF6F3" />
+          <ProgressBar accent={learnerPalette.primary} progress={realProgress} soft="#EAF6F3" />
         </View>
 
         <View style={styles.profileActions}>
@@ -283,6 +434,88 @@ const styles = StyleSheet.create({
   },
   formStack: {
     gap: 10,
+  },
+  fichaRequestCard: {
+    backgroundColor: learnerPalette.surfaceMuted,
+    borderRadius: 22,
+    gap: 10,
+    marginTop: 12,
+    padding: 14,
+  },
+  fichaRequestTitle: {
+    color: learnerPalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 14,
+  },
+  fichaRequestText: {
+    color: learnerPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  fichaOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  fichaChip: {
+    backgroundColor: learnerPalette.surface,
+    borderColor: '#DDE8E2',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexBasis: '47%',
+    flexGrow: 1,
+    gap: 3,
+    padding: 11,
+  },
+  fichaChipActive: {
+    backgroundColor: learnerPalette.mint,
+    borderColor: learnerPalette.primary,
+  },
+  fichaChipCurrent: {
+    backgroundColor: '#ECECEC',
+    borderColor: '#D2D2D2',
+    opacity: 0.72,
+  },
+  fichaChipText: {
+    color: learnerPalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  fichaChipMeta: {
+    color: learnerPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+  },
+  fichaChipTextActive: {
+    color: learnerPalette.primary,
+  },
+  pendingRequestBox: {
+    backgroundColor: learnerPalette.mint,
+    borderLeftColor: learnerPalette.primary,
+    borderLeftWidth: 3,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  pendingRequestText: {
+    color: learnerPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  requestFichaButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: learnerPalette.primary,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  requestFichaText: {
+    color: '#FFFFFF',
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
   },
   fieldBlock: {
     gap: 9,

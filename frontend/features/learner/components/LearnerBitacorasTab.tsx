@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, Linking, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -8,7 +9,7 @@ import { LearnerSectionIntro } from './LearnerSectionIntro';
 // @ts-ignore
 import { escucharContextoAcademicoUsuario, escucharGruposTrabajo, escucharProyectos } from '@/services/academic';
 // @ts-ignore
-import { eliminarBitacora, escucharBitacorasAprendiz, guardarBitacora } from '@/services/bitacoras';
+import { eliminarBitacora, escucharBitacoras, guardarBitacora } from '@/services/bitacoras';
 
 type Props = {
   session: AuthenticatedSession;
@@ -20,13 +21,29 @@ type Instructor = {
   correo?: string;
 };
 
+type Learner = {
+  id: string;
+  nombre: string;
+  correo: string;
+};
+
 type WorkGroup = {
   id: string;
+  fichaId?: string;
+  fichaNumero?: string;
   aprendizIds?: string[];
 };
 
+type ProjectAttachment = {
+  nombre: string | null;
+  uri: string | null;
+  url: string | null;
+  mimeType: string | null;
+  ruta: string | null;
+};
+
 type Project = {
-  id: string;
+  id?: string;
   titulo?: string;
   descripcion?: string;
   fichaId?: string;
@@ -39,31 +56,40 @@ type Project = {
   grupoId?: string | null;
   estado?: string;
   activo?: boolean;
+  archivoNombre: string | null;
+  archivoUri: string | null;
+  archivoMimeType: string | null;
+  archivos: ProjectAttachment[];
 };
 
 type Evidence = {
-  nombre?: string;
+  nombre: string;
   mimeType?: string;
   base64?: string;
+  uri: string;
   url?: string;
   ruta?: string;
+  tipo: 'imagen' | 'archivo';
 };
 
 type Bitacora = {
   id: string;
-  proyectoId?: string;
-  proyectoTitulo?: string;
-  descripcion?: string;
-  fecha?: string;
-  avance?: string;
-  dificultades?: string;
-  evidencias?: Evidence[];
-  archivoNombre?: string;
-  archivoUrl?: string;
-  estado?: string;
-  observacion?: string;
-  revisadoPorNombre?: string;
-  revisadoPorRol?: string;
+  aprendizUid: string;
+  aprendizNombre: string;
+  proyectoId: string;
+  proyectoTitulo: string;
+  descripcion: string;
+  fecha: string;
+  avance: string;
+  dificultades: string;
+  evidencias: Evidence[];
+  archivoNombre: string;
+  archivoUrl: string;
+  estado: string;
+  observacion: string;
+  observaciones: { autorNombre: string; autorRol: string; texto: string }[];
+  revisadoPorNombre: string;
+  revisadoPorRol: string;
 };
 
 type FormState = {
@@ -88,6 +114,8 @@ const emptyForm = (): FormState => ({
 
 export function LearnerBitacorasTab({ session }: Props) {
   const [instructors, setInstructors] = useState<Instructor[]>([]);
+  const [learners, setLearners] = useState<Learner[]>([]);
+  const [learnerSheets, setLearnerSheets] = useState<{ id: string; numero: string }[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<WorkGroup[]>([]);
   const [bitacoras, setBitacoras] = useState<Bitacora[]>([]);
@@ -107,7 +135,11 @@ export function LearnerBitacorasTab({ session }: Props) {
   useEffect(() => {
     const unsubscribeContext = escucharContextoAcademicoUsuario(
       session,
-      (context: { instructores?: Instructor[] }) => setInstructors(context.instructores || []),
+      (context: { aprendices: Learner[]; fichas: { id: string; numero: string }[]; instructores: Instructor[] }) => {
+        setInstructors(context.instructores || []);
+        setLearners(context.aprendices || []);
+        setLearnerSheets(context.fichas || []);
+      },
       () => setFeedback('No pudimos cargar los instructores asignados.')
     );
     const unsubscribeProjects = escucharProyectos(
@@ -118,8 +150,7 @@ export function LearnerBitacorasTab({ session }: Props) {
       (items: WorkGroup[]) => setGroups(items),
       () => setFeedback('No pudimos cargar los grupos de trabajo.')
     );
-    const unsubscribeBitacoras = escucharBitacorasAprendiz(
-      session.uid,
+    const unsubscribeBitacoras = escucharBitacoras(
       setBitacoras,
       () => setFeedback('No pudimos cargar tus bitácoras.')
     );
@@ -132,9 +163,25 @@ export function LearnerBitacorasTab({ session }: Props) {
     };
   }, [session]);
 
+  const learnerSheetKeys = useMemo(
+    () => {
+      const liveSheet = learnerSheets[0];
+      const keys = liveSheet
+        ? [liveSheet.id, liveSheet.numero]
+        : [session.fichaId, session.ficha];
+
+      return new Set(keys.filter(Boolean).map(String));
+    },
+    [learnerSheets, session.ficha, session.fichaId]
+  );
   const learnerGroupIds = useMemo(
-    () => new Set(groups.filter((group) => (group.aprendizIds || []).includes(session.uid)).map((group) => group.id)),
-    [groups, session.uid]
+    () => new Set(groups
+      .filter((group) =>
+        (group.aprendizIds || []).includes(session.uid)
+        && (learnerSheetKeys.has(String(group.fichaId || '')) || learnerSheetKeys.has(String(group.fichaNumero || '')))
+      )
+      .map((group) => group.id)),
+    [groups, learnerSheetKeys, session.uid]
   );
 
   const assignedProjects = useMemo(
@@ -144,13 +191,20 @@ export function LearnerBitacorasTab({ session }: Props) {
           return false;
         }
 
-        if ((project.aprendizIds || []).includes(session.uid)) {
-          return true;
+        const projectBelongsToLearnerSheet =
+          learnerSheetKeys.has(String(project.fichaId || ''))
+          || learnerSheetKeys.has(String(project.fichaNumero || ''));
+        if (!projectBelongsToLearnerSheet) {
+          return false;
         }
 
-        return Boolean(project.grupoId && learnerGroupIds.has(project.grupoId));
+        if (project.asignacionTipo === 'grupo' || project.grupoId) {
+          return Boolean(project.grupoId && learnerGroupIds.has(project.grupoId));
+        }
+
+        return true;
       }),
-    [learnerGroupIds, projects, session.uid]
+    [learnerGroupIds, learnerSheetKeys, projects, session.uid]
   );
 
   const assignedInstructorIds = useMemo(
@@ -198,10 +252,33 @@ export function LearnerBitacorasTab({ session }: Props) {
     () => assignedProjects.find((project) => project.id === selectedProjectId),
     [assignedProjects, selectedProjectId]
   );
+  const selectedProjectGroup = useMemo(
+    () => groups.find((group) => group.id === selectedProject?.grupoId),
+    [groups, selectedProject?.grupoId]
+  );
+  const selectedProjectIsGroup = Boolean(selectedProject?.grupoId || selectedProject?.asignacionTipo === 'grupo');
+  const selectedProjectGroupMemberIds = useMemo(
+    () => new Set(selectedProjectGroup?.aprendizIds || []),
+    [selectedProjectGroup?.aprendizIds]
+  );
+  const selectedProjectGroupMembersText = useMemo(
+    () => getGroupMembersText(selectedProjectGroup?.aprendizIds || [], learners),
+    [learners, selectedProjectGroup?.aprendizIds]
+  );
 
   const projectBitacoras = useMemo(
-    () => bitacoras.filter((bitacora) => bitacora.proyectoId === selectedProjectId),
-    [bitacoras, selectedProjectId]
+    () => bitacoras.filter((bitacora) => {
+      if (bitacora.proyectoId !== selectedProjectId) {
+        return false;
+      }
+
+      if (selectedProjectIsGroup) {
+        return Boolean(bitacora.aprendizUid && selectedProjectGroupMemberIds.has(bitacora.aprendizUid));
+      }
+
+      return bitacora.aprendizUid === session.uid;
+    }),
+    [bitacoras, selectedProjectGroupMemberIds, selectedProjectId, selectedProjectIsGroup, session.uid]
   );
 
   useEffect(() => {
@@ -247,7 +324,7 @@ export function LearnerBitacorasTab({ session }: Props) {
   };
 
   const pickPhoto = async () => {
-    if (form.evidencias.length >= 3) {
+    if (false) {
       setFeedback('Puedes agregar máximo 3 fotografías por bitácora.');
       return;
     }
@@ -260,8 +337,7 @@ export function LearnerBitacorasTab({ session }: Props) {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 0.25,
-      base64: true,
+      quality: 0.9,
     });
 
     if (result.canceled || !result.assets?.length) {
@@ -269,15 +345,15 @@ export function LearnerBitacorasTab({ session }: Props) {
     }
 
     const asset = result.assets[0];
-    if (!asset.base64) {
+    if (!asset.uri) {
       setFeedback('No pudimos comprimir la fotografía. Selecciona otra imagen.');
       return;
     }
 
     const mimeType = asset.mimeType || 'image/jpeg';
-    const base64 = `data:${mimeType};base64,${asset.base64}`;
-    if (base64.length > 280000) {
-      setFeedback('La fotografía sigue siendo muy pesada. Selecciona una imagen de menor tamaño.');
+    const localUri = asset.uri;
+    if (!localUri) {
+      setFeedback('No pudimos leer la fotografía. Selecciona otra imagen.');
       return;
     }
 
@@ -288,9 +364,38 @@ export function LearnerBitacorasTab({ session }: Props) {
         {
           nombre: asset.fileName || `evidencia-${Date.now()}.jpg`,
           mimeType,
-          base64,
+          uri: localUri,
+          tipo: 'imagen',
         },
       ],
+    }));
+  };
+
+  const pickEvidenceFile = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: true,
+      type: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'image/*'],
+    });
+
+    if (result.canceled || !result.assets?.length) {
+      return;
+    }
+
+    const pickedFiles = result.assets
+      .filter((file) => file.uri)
+      .map((file) => ({
+        nombre: file.name || `archivo-${Date.now()}`,
+        mimeType: file.mimeType || 'application/octet-stream',
+        uri: file.uri,
+        tipo: (file.mimeType || '').startsWith('image/') ? 'imagen' as const : 'archivo' as const,
+      }));
+
+    setForm((current) => ({
+      ...current,
+      evidencias: [...current.evidencias, ...pickedFiles].filter((file, index, all) =>
+        !file.uri || all.findIndex((candidate) => candidate.uri === file.uri) === index
+      ),
     }));
   };
 
@@ -322,7 +427,7 @@ export function LearnerBitacorasTab({ session }: Props) {
       return;
     }
 
-    if (form.archivoUrl.trim() && !/^https?:\/\/\S+$/i.test(form.archivoUrl.trim())) {
+    if (form.archivoUrl.trim() && !/^https:\/\/\S+$/i.test(form.archivoUrl.trim())) {
       setFeedback('El enlace del archivo debe comenzar por http:// o https://.');
       return;
     }
@@ -331,10 +436,11 @@ export function LearnerBitacorasTab({ session }: Props) {
     setFeedback('');
 
     try {
+      const editingBitacora = editingId ? bitacoras.find((bitacora) => bitacora.id === editingId) : undefined;
       await guardarBitacora({
         id: editingId || undefined,
-        aprendizUid: session.uid,
-        aprendizNombre: session.name,
+        aprendizUid: editingBitacora?.aprendizUid || session.uid,
+        aprendizNombre: editingBitacora?.aprendizNombre || session.name,
         proyectoId: selectedProject.id,
         proyectoTitulo: selectedProject.titulo || 'Proyecto',
         fichaId: selectedProject.fichaId || session.fichaId || session.ficha || '',
@@ -353,7 +459,7 @@ export function LearnerBitacorasTab({ session }: Props) {
       setFeedback(editingId ? 'Bitácora actualizada correctamente.' : 'Bitácora creada correctamente.');
       closeForm();
     } catch (error) {
-      const typedError = error as { message?: string };
+      const typedError = error as { message: string };
       setFeedback(typedError.message || 'No pudimos guardar la bitácora.');
     } finally {
       setSaving(false);
@@ -378,7 +484,7 @@ export function LearnerBitacorasTab({ session }: Props) {
   };
 
   const handleDelete = (bitacoraId: string) => {
-    Alert.alert('Eliminar bitácora', '¿Seguro que quieres eliminar esta bitácora?', [
+    Alert.alert('Eliminar bitácora', '¿Seguro que quieres eliminar esta bitácora', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
@@ -391,7 +497,7 @@ export function LearnerBitacorasTab({ session }: Props) {
             }
             setFeedback('Bitácora eliminada.');
           } catch (error) {
-            const typedError = error as { message?: string };
+            const typedError = error as { message: string };
             setFeedback(typedError.message || 'No pudimos eliminar la bitácora.');
           }
         },
@@ -452,7 +558,7 @@ export function LearnerBitacorasTab({ session }: Props) {
             {instructorProjects.map((project) => (
               <Pressable
                 key={project.id}
-                onPress={() => setSelectedProjectId(project.id)}
+                onPress={() => setSelectedProjectId(project.id || '')}
                 style={[styles.projectCard, selectedProjectId === project.id && styles.projectCardActive]}>
                 <View style={styles.projectHeader}>
                   <Text style={styles.projectTitle}>{project.titulo || 'Proyecto sin nombre'}</Text>
@@ -479,6 +585,7 @@ export function LearnerBitacorasTab({ session }: Props) {
             <InfoRow icon="book-check-outline" text={`Competencia: ${selectedProject.competenciaNombre || 'Sin registrar'}`} />
             <InfoRow icon="target" text={`RAP: ${selectedProject.rapDescripcion || 'Sin registrar'}`} />
             {selectedProject.descripcion ? <Text style={styles.detailText}>{selectedProject.descripcion}</Text> : null}
+            <ProjectFile project={selectedProject} />
             <Pressable onPress={openCreateForm} style={styles.createButton}>
               <MaterialCommunityIcons name="plus" size={19} color="#FFFFFF" />
               <Text style={styles.createButtonText}>Crear bitácora</Text>
@@ -529,12 +636,13 @@ export function LearnerBitacorasTab({ session }: Props) {
                 onChangeText={(value) => updateField('dificultades', value)}
               />
 
-              <Text style={styles.fieldLabel}>Evidencias fotográficas</Text>
+              <Text style={styles.fieldLabel}>Evidencias</Text>
               <Text style={styles.helperText}>
-                Máximo 3 fotos comprimidas. Se guardan directamente en la bitácora sin usar Storage.
+                Puedes adjuntar fotos o documentos. Los archivos se guardan en Supabase y la bitácora conserva el enlace.
               </Text>
               <View style={styles.attachmentActions}>
                 <AttachmentButton icon="image-plus" label="Añadir foto" onPress={pickPhoto} />
+                <AttachmentButton icon="file-upload-outline" label="Añadir archivo" onPress={pickEvidenceFile} />
               </View>
 
               <View style={styles.attachmentList}>
@@ -542,7 +650,7 @@ export function LearnerBitacorasTab({ session }: Props) {
                   <AttachmentPreview
                     key={`saved-${evidence.ruta || evidence.nombre || index}`}
                     name={evidence.nombre || 'Evidencia guardada'}
-                    imageUri={getEvidenceUri(evidence)}
+                    imageUri={getEvidenceUri(evidence) || ''}
                     onRemove={() => removeSavedEvidence(index)}
                   />
                 ))}
@@ -583,11 +691,22 @@ export function LearnerBitacorasTab({ session }: Props) {
           </View>
 
           <View style={styles.stack}>
-            {projectBitacoras.map((bitacora) => (
+            {projectBitacoras.map((bitacora) => {
+              const isOwnBitacora = bitacora.aprendizUid === session.uid;
+              const canEditBitacora = isOwnBitacora || (selectedProjectIsGroup && Boolean(bitacora.aprendizUid && selectedProjectGroupMemberIds.has(bitacora.aprendizUid)));
+              const bitacoraObservations = getLearnerObservations(bitacora);
+
+              return (
               <View key={bitacora.id} style={styles.bitacoraCard}>
                 <View style={styles.cardHeader}>
                   <View style={styles.cardCopy}>
                     <Text style={styles.cardTitle}>{bitacora.fecha || 'Sin fecha'}</Text>
+                    {selectedProjectIsGroup ? (
+                      <>
+                        <Text style={styles.cardMeta}>Publicada por {bitacora.aprendizNombre || 'integrante del grupo'}</Text>
+                        <Text style={styles.cardMeta}>Integrantes: {selectedProjectGroupMembersText}</Text>
+                      </>
+                    ) : null}
                   </View>
                   <StatusBadge status={bitacora.estado} />
                 </View>
@@ -601,19 +720,19 @@ export function LearnerBitacorasTab({ session }: Props) {
                   onPress={() => toggleObservation(bitacora.id)}
                   style={[
                     styles.observationButton,
-                    Boolean(bitacora.observacion) && styles.observationButtonActive,
+                    Boolean(bitacoraObservations.length) && styles.observationButtonActive,
                   ]}>
                   <MaterialCommunityIcons
-                    name={bitacora.observacion ? 'message-text-outline' : 'message-outline'}
+                    name={bitacoraObservations.length ? 'message-text-outline' : 'message-outline'}
                     size={18}
-                    color={bitacora.observacion ? learnerPalette.primary : learnerPalette.textMuted}
+                    color={bitacoraObservations.length ? learnerPalette.primary : learnerPalette.textMuted}
                   />
                   <Text
                     style={[
                       styles.observationButtonText,
-                      Boolean(bitacora.observacion) && styles.observationButtonTextActive,
+                      Boolean(bitacoraObservations.length) && styles.observationButtonTextActive,
                     ]}>
-                    {bitacora.observacion ? 'Ver observaciones' : 'Sin observaciones'}
+                    {bitacoraObservations.length ? 'Ver observaciones' : 'Sin observaciones'}
                   </Text>
                   <MaterialCommunityIcons
                     name={expandedObservationIds.includes(bitacora.id) ? 'chevron-up' : 'chevron-down'}
@@ -624,12 +743,16 @@ export function LearnerBitacorasTab({ session }: Props) {
 
                 {expandedObservationIds.includes(bitacora.id) ? (
                   <View style={styles.observationPanel}>
-                    {bitacora.observacion ? (
+                    {bitacoraObservations.length ? (
                       <>
-                        <Text style={styles.observationAuthor}>
-                          {getReviewerLabel(bitacora)}
-                        </Text>
-                        <Text style={styles.observation}>{bitacora.observacion}</Text>
+                        {bitacoraObservations.map((item, index) => (
+                          <View key={`${item.autorNombre || 'obs'}-${index}`} style={styles.observationEntry}>
+                            <Text style={styles.observationAuthor}>
+                              {[item.autorNombre, item.autorRol].filter(Boolean).join(' · ') || 'Equipo académico'}
+                            </Text>
+                            <Text style={styles.observation}>{item.texto}</Text>
+                          </View>
+                        ))}
                       </>
                     ) : (
                       <Text style={styles.noObservationText}>
@@ -645,10 +768,10 @@ export function LearnerBitacorasTab({ session }: Props) {
                     return imageUri ? (
                       <Image key={`${bitacora.id}-${index}`} source={{ uri: imageUri }} style={styles.evidenceImage} />
                     ) : (
-                      <View key={`${bitacora.id}-${index}`} style={styles.fileBadge}>
+                      <Pressable key={`${bitacora.id}-${index}`} onPress={() => openEvidenceAttachment(evidence)} style={styles.fileBadge}>
                         <MaterialCommunityIcons name="file-outline" size={18} color={learnerPalette.primary} />
                         <Text numberOfLines={1} style={styles.fileBadgeText}>{evidence.nombre || 'Archivo'}</Text>
-                      </View>
+                      </Pressable>
                     );
                   })}
                 </View>
@@ -665,17 +788,22 @@ export function LearnerBitacorasTab({ session }: Props) {
                 ) : null}
 
                 <View style={styles.actions}>
-                  <Pressable onPress={() => handleEdit(bitacora)} style={styles.smallButton}>
-                    <MaterialCommunityIcons name="pencil-outline" size={16} color={learnerPalette.primary} />
-                    <Text style={styles.smallButtonText}>Editar</Text>
-                  </Pressable>
-                  <Pressable onPress={() => handleDelete(bitacora.id)} style={styles.deleteButton}>
-                    <MaterialCommunityIcons name="trash-can-outline" size={16} color="#C45C43" />
-                    <Text style={styles.deleteButtonText}>Eliminar</Text>
-                  </Pressable>
+                  {canEditBitacora ? (
+                    <Pressable onPress={() => handleEdit(bitacora)} style={styles.smallButton}>
+                      <MaterialCommunityIcons name="pencil-outline" size={16} color={learnerPalette.primary} />
+                      <Text style={styles.smallButtonText}>Editar</Text>
+                    </Pressable>
+                  ) : null}
+                  {isOwnBitacora ? (
+                    <Pressable onPress={() => handleDelete(bitacora.id)} style={styles.deleteButton}>
+                      <MaterialCommunityIcons name="trash-can-outline" size={16} color="#C45C43" />
+                      <Text style={styles.deleteButtonText}>Eliminar</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
-            ))}
+              );
+            })}
             {!projectBitacoras.length ? (
               <View style={styles.emptyCard}>
                 <MaterialCommunityIcons name="notebook-outline" size={30} color={learnerPalette.primary} />
@@ -712,7 +840,7 @@ const dateFormatter = new Intl.DateTimeFormat('es-CO', {
 });
 const weekDays = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
 
-function parseDate(value?: string) {
+function parseDate(value: string) {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return null;
   }
@@ -837,13 +965,61 @@ function getEvidenceUri(evidence: Evidence) {
   if (evidence.base64?.startsWith('data:image')) {
     return evidence.base64;
   }
-  if (evidence.url && (evidence.mimeType?.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(evidence.nombre || ''))) {
+  if (evidence.url && ((evidence.mimeType || '').startsWith('image/') || /\.(png|jpeg|gif|webp)$/i.test(evidence.nombre || ''))) {
     return evidence.url;
+  }
+  if (evidence.uri && ((evidence.mimeType || '').startsWith('image/') || /\.(png|jpeg|gif|webp)$/i.test(evidence.nombre || ''))) {
+    return evidence.uri;
   }
   return undefined;
 }
 
-function getBitacoraStatus(status?: string) {
+function getLearnerObservations(bitacora: Bitacora) {
+  if (Array.isArray(bitacora.observaciones) && bitacora.observaciones.length) {
+    return bitacora.observaciones;
+  }
+
+  if (!bitacora.observacion) {
+    return [];
+  }
+
+  return [{
+    autorNombre: bitacora.revisadoPorNombre,
+    autorRol: bitacora.revisadoPorRol,
+    texto: bitacora.observacion,
+  }];
+}
+
+function getGroupMembersText(memberIds: string[], learners: Learner[]) {
+  if (!memberIds.length) {
+    return 'Sin integrantes registrados';
+  }
+
+  const learnerById = new Map(learners.map((learner) => [learner.id, learner]));
+  return memberIds
+    .map((memberId) => {
+      const learner = learnerById.get(memberId);
+      return learner?.nombre || learner?.correo || 'Integrante';
+    })
+    .join(', ');
+}
+
+async function openEvidenceAttachment(evidence: Evidence) {
+  const fileUrl = evidence.url || evidence.uri;
+
+  if (!fileUrl) {
+    Alert.alert('Archivo no disponible', 'Esta evidencia no tiene un enlace disponible.');
+    return;
+  }
+
+  try {
+    await Linking.openURL(fileUrl);
+  } catch {
+    Alert.alert('No pudimos abrir el archivo', 'Intenta nuevamente o vuelve a subir la evidencia.');
+  }
+}
+
+function getBitacoraStatus(status: string) {
   if (status === 'Aprobada') {
     return { label: 'Aprobada', background: '#EAFBF7', color: '#0E8F72', icon: 'check-circle-outline' as const };
   }
@@ -860,8 +1036,8 @@ function getBitacoraStatus(status?: string) {
 }
 
 function getReviewerLabel(bitacora: Bitacora) {
-  const role = bitacora.revisadoPorRol?.trim();
-  const name = bitacora.revisadoPorNombre?.trim();
+  const role = bitacora.revisadoPorRol.trim();
+  const name = bitacora.revisadoPorNombre.trim();
 
   if (role && name) {
     return `Observación de ${role}: ${name}`;
@@ -874,7 +1050,7 @@ function getReviewerLabel(bitacora: Bitacora) {
   return 'Observación del instructor o pasante';
 }
 
-function StatusBadge({ status }: { status?: string }) {
+function StatusBadge({ status }: { status: string }) {
   const config = getBitacoraStatus(status);
 
   return (
@@ -966,12 +1142,80 @@ function InfoRow({ icon, text }: { icon: 'book-check-outline' | 'target'; text: 
   );
 }
 
+function isLocalOnlyProjectFile(uri: string | null) {
+  return /^(file|blob):/i.test(uri || '');
+}
+
+async function openProjectAttachment(uri: string | null) {
+  if (!uri || isLocalOnlyProjectFile(uri)) {
+    Alert.alert(
+      'Archivo no disponible',
+      'Este archivo fue guardado como enlace local. El instructor debe editar y volver a guardar el proyecto para subirlo correctamente.'
+    );
+    return;
+  }
+
+  try {
+    await Linking.openURL(uri);
+  } catch {
+    Alert.alert('No pudimos abrir el archivo', 'Intenta de nuevo o pídele al instructor que vuelva a subirlo.');
+  }
+}
+
+function ProjectFile({ project }: { project: Project }) {
+  const projectFiles = Array.isArray(project.archivos) ? project.archivos : [];
+  const files = projectFiles.length
+    ? projectFiles
+    : project.archivoNombre || project.archivoUri
+      ? [{ nombre: project.archivoNombre || 'Archivo del instructor', uri: project.archivoUri || '', url: project.archivoUri || '', mimeType: project.archivoMimeType || '' }]
+      : [];
+
+  if (!files.length) {
+    return (
+      <View style={styles.projectFileEmpty}>
+        <MaterialCommunityIcons name="file-hidden" size={18} color={learnerPalette.textMuted} />
+        <Text style={styles.projectFileEmptyText}>El instructor no ha adjuntado archivos a este proyecto.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.projectFileList}>
+      {files.map((file, index) => (
+        <Pressable
+          key={file.uri || file.nombre || `project-file-${index}`}
+          disabled={!(file.url || file.uri)}
+          onPress={() => {
+            const fileUrl = file.url || file.uri;
+            return openProjectAttachment(fileUrl);
+          }}
+          style={styles.projectFileCard}>
+          <View style={styles.projectFileIcon}>
+            <MaterialCommunityIcons name="file-document-outline" size={20} color={learnerPalette.primary} />
+          </View>
+          <View style={styles.cardCopy}>
+            <Text style={styles.projectFileTitle}>{file.nombre || `Archivo del instructor ${index + 1}`}</Text>
+            <Text style={styles.projectFileMeta}>
+              {file.url || file.uri
+                ? isLocalOnlyProjectFile(file.url || file.uri)
+                  ? 'Archivo local antiguo. El instructor debe volver a guardar el proyecto.'
+                  : 'Toca para abrir el archivo adjunto'
+                : 'Archivo registrado sin enlace disponible'}
+            </Text>
+          </View>
+          {file.url || file.uri ? <MaterialCommunityIcons name="open-in-new" size={18} color={learnerPalette.primary} /> : null}
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
 function AttachmentButton({
   icon,
   label,
   onPress,
 }: {
-  icon: 'image-plus';
+  icon: 'file-upload-outline' | 'image-plus';
   label: string;
   onPress: () => void;
 }) {
@@ -988,7 +1232,7 @@ function AttachmentPreview({
   name,
   onRemove,
 }: {
-  imageUri?: string;
+  imageUri: string;
   name: string;
   onRemove: () => void;
 }) {
@@ -1132,6 +1376,50 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 18,
+  },
+  projectFileList: {
+    gap: 8,
+  },
+  projectFileCard: {
+    alignItems: 'center',
+    backgroundColor: learnerPalette.mint,
+    borderRadius: 16,
+    flexDirection: 'row',
+    gap: 10,
+    padding: 12,
+  },
+  projectFileEmpty: {
+    alignItems: 'center',
+    backgroundColor: learnerPalette.surfaceMuted,
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 8,
+    padding: 11,
+  },
+  projectFileEmptyText: {
+    color: learnerPalette.textMuted,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  projectFileIcon: {
+    alignItems: 'center',
+    backgroundColor: learnerPalette.surface,
+    borderRadius: 999,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  projectFileTitle: {
+    color: learnerPalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  projectFileMeta: {
+    color: learnerPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
   },
   createButton: {
     alignItems: 'center',
@@ -1323,6 +1611,12 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsSemiBold',
     fontSize: 14,
   },
+  cardMeta: {
+    color: learnerPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+    marginTop: 2,
+  },
   statusBadge: {
     alignItems: 'center',
     borderRadius: 999,
@@ -1375,6 +1669,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 5,
     padding: 12,
+  },
+  observationEntry: {
+    gap: 4,
   },
   observationAuthor: {
     color: learnerPalette.primary,

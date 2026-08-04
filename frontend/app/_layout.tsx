@@ -14,9 +14,17 @@ import 'react-native-reanimated';
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      <Stack>
+      <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="dashboard/dashboard" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="dashboard/dashboard"
+          options={{
+            gestureEnabled: false,
+            headerBackVisible: false,
+            headerShown: false,
+            title: '',
+          }}
+        />
       </Stack>
       <StatusBar backgroundColor="transparent" style="dark" translucent />
     </SafeAreaProvider>

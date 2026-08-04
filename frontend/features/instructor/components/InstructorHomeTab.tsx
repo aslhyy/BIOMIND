@@ -1,8 +1,9 @@
 import { CurrentTrimesterSummary } from '@/features/workspace/components/CurrentTrimesterSummary';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   instructorAlerts,
   instructorMetrics,
@@ -20,6 +21,8 @@ import { IconLabel, ProgressBar, SectionHeading, SectionTitle, StatusBadge } fro
 import { escucharContextoAcademicoUsuario, escucharProyectos } from '@/services/academic';
 // @ts-ignore
 import { escucharBitacoras } from '@/services/bitacoras';
+// @ts-ignore
+import { escucharResumenConversaciones } from '@/services/projectConversations';
 
 type RealSheet = {
   id: string;
@@ -30,7 +33,35 @@ type RealSheet = {
 
 type RealLearner = {
   id: string;
+  nombre?: string;
+  correo?: string;
+  photoUrl?: string | null;
   fichaId?: string | null;
+  fichaSolicitudId?: string;
+  fichaSolicitudNumero?: string;
+  fichaSolicitudPrograma?: string;
+};
+
+type RealCompetence = {
+  id: string;
+  codigo?: string;
+  nombre?: string;
+};
+
+type RealRap = {
+  id: string;
+  codigo?: string;
+  descripcion?: string;
+  competenciaId?: string;
+};
+
+type RealAssignment = {
+  id: string;
+  fichaId?: string;
+  instructorUid?: string;
+  competenciaId?: string;
+  resultadoId?: string;
+  resultadoIds?: string[];
 };
 
 type RealProject = {
@@ -42,35 +73,79 @@ type RealProject = {
   estado?: string;
   progreso?: number;
   instructorUid?: string;
+  creadoEn?: any;
+  actualizadoEn?: any;
 };
 
 type RealBitacora = {
   id: string;
   proyectoId?: string;
+  proyectoTitulo?: string;
+  aprendizUid?: string;
+  aprendizNombre?: string;
+  creadoEn: any;
+  actualizadoEn?: any;
+  fecha?: string;
   estado?: string;
 };
 
+type ConversationSummary = {
+  id: string;
+  proyectoId?: string;
+  fichaId?: string;
+  fichaNumero?: string;
+  grupoId?: string;
+  participanteUids?: string[];
+  destinatarioUid?: string;
+  instructorUid?: string;
+  ultimoMensaje: string;
+  ultimoRemitenteUid: string;
+  ultimoRemitenteNombre: string;
+  ultimoRemitenteRol: string;
+  actualizadoEn: any;
+};
+
+type InstructorNewsAction = 'chat' | 'tracking';
+
 export function InstructorHomeTab({
+  onOpenNews,
   session,
+  showNews = true,
+  showRecentProjects = true,
   onOpenChatChannel,
 }: {
+  onOpenNews: (target: InstructorNewsAction) => void;
   session: AuthenticatedSession;
+  showNews?: boolean;
+  showRecentProjects?: boolean;
   onOpenChatChannel: (channel: 'admin' | 'pasante') => void;
 }) {
   const [realSheets, setRealSheets] = useState<RealSheet[]>([]);
   const [realLearners, setRealLearners] = useState<RealLearner[]>([]);
+  const [realCompetences, setRealCompetences] = useState<RealCompetence[]>([]);
+  const [realRaps, setRealRaps] = useState<RealRap[]>([]);
+  const [realAssignments, setRealAssignments] = useState<RealAssignment[]>([]);
   const [realProjects, setRealProjects] = useState<RealProject[]>([]);
   const [realBitacoras, setRealBitacoras] = useState<RealBitacora[]>([]);
+  const [conversationSummaries, setConversationSummaries] = useState<ConversationSummary[]>([]);
+  const [sheetModalOpen, setSheetModalOpen] = useState(false);
+  const [selectedSheetId, setSelectedSheetId] = useState('');
+  const [sheetLearnerSearch, setSheetLearnerSearch] = useState('');
+  const [learnersOpen, setLearnersOpen] = useState(false);
+  const [graphProject, setGraphProject] = useState<ProjectSnapshot | null>(null);
   const [realError, setRealError] = useState('');
 
   useEffect(() => {
     const handleError = (error: any) =>
-      setRealError(error?.message || 'No pudimos cargar el resumen real.');
+      setRealError(error.message || 'No pudimos cargar el resumen real.');
     const unsubscribeContext = escucharContextoAcademicoUsuario(
       session,
       (context: any) => {
         setRealSheets(context.fichas || []);
         setRealLearners(context.aprendices || []);
+        setRealCompetences(context.competencias || []);
+        setRealRaps(context.resultados || []);
+        setRealAssignments(context.asignaciones || []);
       },
       handleError
     );
@@ -79,11 +154,13 @@ export function InstructorHomeTab({
       handleError
     );
     const unsubscribeBitacoras = escucharBitacoras(setRealBitacoras, handleError);
+    const unsubscribeSummaries = escucharResumenConversaciones(setConversationSummaries, handleError);
 
     return () => {
       unsubscribeContext?.();
       unsubscribeProjects?.();
       unsubscribeBitacoras?.();
+      unsubscribeSummaries?.();
     };
   }, [session]);
 
@@ -151,7 +228,7 @@ export function InstructorHomeTab({
     })
     : sheetOverviews;
   const realProjectSnapshots: ProjectSnapshot[] = realProjects.length
-    ? realProjects.slice(0, 4).map((project) => {
+    ? [...realProjects].sort((a, b) => getMillis((b as any).creadoEn) - getMillis((a as any).creadoEn)).slice(0, 6).map((project) => {
       const logs = instructorBitacoras.filter((bitacora) => bitacora.proyectoId === project.id);
 
       return {
@@ -169,6 +246,84 @@ export function InstructorHomeTab({
       };
     })
     : projectSnapshots;
+  const selectedSheet = realSheets.find((sheet) => sheet.id === selectedSheetId);
+  const selectedSheetProjects = realProjects.filter((project) => project.fichaId === selectedSheetId);
+  const selectedSheetLearners = realLearners.filter((learner) => learner.fichaId === selectedSheetId);
+  const selectedSheetAssignments = realAssignments.filter((assignment) =>
+    assignment.fichaId === selectedSheetId && assignment.instructorUid === session.uid
+  );
+  const selectedSheetCompetenceRows = selectedSheetAssignments.map((assignment) => {
+    const competence = realCompetences.find((item) => item.id === assignment.competenciaId);
+    const rapIds = [
+      assignment.resultadoId,
+      ...(Array.isArray(assignment.resultadoIds) ? assignment.resultadoIds : []),
+    ].filter(Boolean);
+    const raps = realRaps.filter((rap) => rapIds.includes(rap.id));
+
+    return {
+      id: assignment.id,
+      competence,
+      raps,
+    };
+  });
+  const filteredSheetLearners = selectedSheetLearners.filter((learner) =>
+    `${learner.nombre || ''} ${learner.correo || ''}`.toLowerCase().includes(sheetLearnerSearch.trim().toLowerCase())
+  );
+  const realSheetKeys = useMemo(
+    () => new Set(realSheets.flatMap((sheet) => [sheet.id, sheet.numero]).filter(Boolean).map(String)),
+    [realSheets]
+  );
+  const learnerById = useMemo(() => new Map(realLearners.map((learner) => [learner.id, learner])), [realLearners]);
+  const projectById = useMemo(() => new Map(realProjects.map((project) => [project.id, project])), [realProjects]);
+  const newsItems = useMemo(() => {
+    const bitacoraNews = instructorBitacoras
+      .map((bitacora) => {
+        const project = projectById.get(bitacora.proyectoId || '');
+        const learner = learnerById.get(bitacora.aprendizUid || '');
+        return {
+          id: `bitacora-${bitacora.id}`,
+          accent: instructorPalette.secondary,
+          action: 'tracking' as const,
+          icon: 'notebook-check-outline' as const,
+          type: 'Bitácora subida',
+          title: learner?.nombre || bitacora.aprendizNombre || 'Aprendiz',
+          detail: project?.titulo || bitacora.proyectoTitulo || 'Proyecto asignado',
+          photoUrl: learner?.photoUrl || null,
+          timestamp: getMillis(bitacora.actualizadoEn) || getMillis(bitacora.creadoEn) || getDateMillis(bitacora.fecha || ''),
+        };
+      });
+    const messageNews = conversationSummaries
+      .filter((summary) =>
+        summary.ultimoRemitenteUid
+        && summary.ultimoRemitenteUid !== session.uid
+        && (
+          summary.instructorUid === session.uid
+          || realProjectIds.has(summary.proyectoId || '')
+          || (summary.participanteUids || []).includes(session.uid)
+          || summary.destinatarioUid === session.uid
+          || realSheetKeys.has(String(summary.fichaId || ''))
+          || realSheetKeys.has(String(summary.fichaNumero || ''))
+        )
+      )
+      .map((summary) => {
+        const user = learnerById.get(summary.ultimoRemitenteUid || '');
+        return {
+          id: `mensaje-${summary.id}`,
+          accent: instructorPalette.primary,
+          action: 'chat' as const,
+          icon: 'message-text-outline' as const,
+          type: 'Mensaje nuevo',
+          title: user?.nombre || summary.ultimoRemitenteNombre || 'Usuario',
+          detail: summary.ultimoMensaje || 'Nuevo mensaje académico',
+          photoUrl: user?.photoUrl || null,
+          timestamp: getMillis(summary.actualizadoEn),
+        };
+      });
+
+    return [...messageNews, ...bitacoraNews]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 5);
+  }, [conversationSummaries, instructorBitacoras, learnerById, projectById, realProjectIds, realSheetKeys, session.uid]);
   const validationItems = [
     {
       id: 'rap1',
@@ -235,46 +390,78 @@ export function InstructorHomeTab({
 
         <View style={styles.metricsRow}>
           {realMetrics.map((metric) => (
-            <MetricCard key={metric.id} metric={metric} />
+            <MetricCard
+              key={metric.id}
+              metric={metric}
+              onPress={metric.id === 'real-sheets' ? () => {
+                setSheetModalOpen(true);
+                setSelectedSheetId('');
+                setLearnersOpen(false);
+                setSheetLearnerSearch('');
+              } : undefined}
+            />
           ))}
         </View>
         {realError ? <Text style={styles.errorText}>{realError}</Text> : null}
       </View>
 
-      <View style={styles.compactPanel}>
+      {showNews ? <View style={styles.compactPanel}>
         <SectionHeading
-          actionLabel={`${realSheetOverviews.length} fichas`}
-          subtitle="Cada ficha muestra su trimestre, aprendices y avance."
-          title="Fichas a cargo"
+          actionLabel={`${newsItems.length} novedades`}
+          subtitle="Mensajes recientes y bitacoras nuevas de tus fichas."
+          title="Novedades"
         />
-        <View style={styles.sheetGrid}>
-          {realSheetOverviews.slice(0, 4).map((sheet) => (
-            <View key={sheet.id} style={styles.sheetCardCompact}>
-              <Text style={styles.sheetCode}>Ficha {sheet.code}</Text>
-              <Text style={styles.sheetMeta}>{sheet.program}</Text>
-              <Text style={styles.sheetTrimester}>{sheet.trimester}</Text>
-              <ProgressBar accent={instructorPalette.primary} progress={sheet.progress} soft="#EAF6F3" />
-              <View style={styles.compactMetaRow}>
-                <IconLabel icon="account-multiple-outline" text={`${sheet.learners} aprendices`} />
-                <IconLabel icon="briefcase-outline" text={`${sheet.activeProjects} proyectos`} />
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
+        {newsItems.length ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.newsCarouselContent}>
+            {newsItems.map((item) => (
+              <InstructorNewsCard key={item.id} item={item} onPress={() => onOpenNews(item.action)} />
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={styles.emptyRequestCard}>
+            <Text style={styles.alertText}>No hay novedades recientes.</Text>
+          </View>
+        )}
+      </View> : null}
 
-      <View style={styles.compactPanel}>
+      {showRecentProjects ? <View style={styles.compactPanel}>
         <SectionHeading
           actionLabel={`${realProjects.length} total`}
           subtitle="Resumen rápido; el detalle está en Gestión académica."
           title="Proyectos recientes"
         />
-        <View style={styles.stack}>
-          {realProjectSnapshots.slice(0, 3).map((project) => (
-            <ProjectRow key={project.id} project={project} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.projectCarousel}>
+          {realProjectSnapshots.map((project) => (
+            <View key={project.id} style={styles.projectSlide}>
+              <ProjectRow project={project} advanced onOpenGraph={() => setGraphProject(project)} />
+            </View>
           ))}
-        </View>
-      </View>
+        </ScrollView>
+      </View> : null}
+
+      <GraphInfoModal project={graphProject} onClose={() => setGraphProject(null)} />
+
+      <SheetDetailModal
+        competenceRows={selectedSheetCompetenceRows.filter((row) => row.competence) as { id: string; competence: RealCompetence; raps: RealRap[] }[]}
+        learners={filteredSheetLearners}
+        learnersOpen={learnersOpen}
+        learnerSearch={sheetLearnerSearch}
+        onClose={() => {
+          setSheetModalOpen(false);
+          setSelectedSheetId('');
+        }}
+        onLearnerSearch={setSheetLearnerSearch}
+        onSelectSheet={(sheetId) => {
+          setSelectedSheetId(sheetId);
+          setLearnersOpen(false);
+          setSheetLearnerSearch('');
+        }}
+        onToggleLearners={() => setLearnersOpen((current) => !current)}
+        projects={selectedSheetProjects}
+        sheet={selectedSheet}
+        sheetOverviews={realSheetOverviews}
+        visible={sheetModalOpen}
+      />
 
       <View style={styles.dashboardHidden}>
       <CurrentTrimesterSummary
@@ -308,7 +495,7 @@ export function InstructorHomeTab({
             <ProgressBar accent={instructorPalette.primary} progress={sheet.progress} soft="#EAF6F3" />
             <View style={styles.sheetFooter}>
               <IconLabel icon="briefcase-outline" text={`${sheet.activeProjects} proyectos activos`} />
-              <IconLabel icon="book-check-outline" text={`${sheet.competencies.length} competencias`} />
+              <IconLabel icon="book-check-outline" text={`${sheet.competencies?.length || 0} competencias`} />
             </View>
           </View>
         ))}
@@ -411,20 +598,34 @@ export function InstructorHomeTab({
   );
 }
 
-function MetricCard({ metric }: { metric: InstructorMetric }) {
-  return (
-    <View style={[styles.metricCard, { backgroundColor: metric.soft }]}>
+function MetricCard({ metric, onPress }: { metric: InstructorMetric; onPress?: () => void }) {
+  const MetricContent = () => (
+    <>
       <View style={[styles.metricIcon, { backgroundColor: metric.accent }]}>
         <MaterialCommunityIcons name={metric.icon} size={18} color={instructorPalette.surfaceHover} />
       </View>
       <Text style={[styles.metricValue, { color: metric.accent }, metric.valueStyle]}>{metric.value}</Text>
       <Text style={styles.metricLabel}>{metric.label}</Text>
       <Text style={styles.metricCaption}>{metric.caption}</Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable onPress={onPress} style={[styles.metricCard, { backgroundColor: metric.soft }]}>
+        <MetricContent />
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.metricCard, { backgroundColor: metric.soft }]}>
+      <MetricContent />
     </View>
   );
 }
 
-function ProjectRow({ project }: { project: ProjectSnapshot }) {
+function ProjectRow({ advanced = false, onOpenGraph, project }: { advanced?: boolean; onOpenGraph?: () => void; project: ProjectSnapshot }) {
   return (
     <View style={styles.projectRow}>
       <View style={styles.projectHeader}>
@@ -446,6 +647,275 @@ function ProjectRow({ project }: { project: ProjectSnapshot }) {
         <IconLabel icon="alert-circle-outline" text={project.contamination} />
         <IconLabel icon="camera-outline" text={`${project.photos} fotos`} />
       </View>
+      {advanced ? (
+        <Pressable onPress={onOpenGraph} style={styles.advancedGraph}>
+          <View style={styles.graphHeader}>
+            <Text style={styles.graphTitle}>Gráfica avanzada</Text>
+            <Text style={styles.graphValue}>{project.progress}%</Text>
+          </View>
+          <View style={styles.graphBars}>
+            {[project.progress, Math.max(18, 100 - project.progress), Math.min(92, project.progress + 14)].map((value, index) => (
+              <View key={`${project.id}-bar-${index}`} style={styles.graphBarTrack}>
+                <View style={[styles.graphBarFill, { height: `${Math.max(12, value)}%`, backgroundColor: index === 1 ? instructorPalette.secondary : project.accent }]} />
+              </View>
+            ))}
+          </View>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function InstructorNewsCard({
+  item,
+  onPress,
+}: {
+  item: {
+    accent: string;
+    detail: string;
+    icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
+    photoUrl: string | null;
+    title: string;
+    type: string;
+  };
+  onPress: () => void;
+}) {
+  return (
+    <Pressable onPress={onPress} style={styles.newsCard}>
+      <View style={[styles.newsIcon, { backgroundColor: `${item.accent}22` }]}>
+        <MaterialCommunityIcons name={item.icon} size={20} color={item.accent} />
+      </View>
+      <View style={styles.newsCopy}>
+        <Text numberOfLines={1} style={styles.newsType}>{item.type}</Text>
+        <Text numberOfLines={2} style={styles.newsTitle}>{item.title}</Text>
+        <Text numberOfLines={3} style={styles.newsText}>{item.detail}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function GraphInfoModal({ onClose, project }: { onClose: () => void; project: ProjectSnapshot | null }) {
+  const progress = project?.progress || 0;
+  const paceLabel = progress >= 75 ? 'avance alto' : progress >= 45 ? 'avance estable' : 'avance por reforzar';
+  const evidenceLabel = project?.photos
+    ? `${project.photos} evidencias registradas`
+    : 'sin evidencias registradas';
+  const riskLabel = progress < 45
+    ? 'La IA detecta que conviene revisar acompanamiento y proximas entregas.'
+    : progress < 75
+      ? 'La IA ve un desarrollo activo, pero aun requiere seguimiento cercano.'
+      : 'La IA identifica buen ritmo y condiciones favorables para validacion.';
+
+  return (
+    <Modal animationType="fade" transparent visible={Boolean(project)} onRequestClose={onClose}>
+      <View style={styles.graphModalBackdrop}>
+        <View style={styles.graphModalCard}>
+          <View style={styles.modalHeader}>
+            <View style={styles.alertCopy}>
+              <Text style={styles.dashboardEyebrow}>Grafica avanzada</Text>
+              <Text style={styles.modalTitle}>{project?.title || 'Proyecto'}</Text>
+              <Text style={styles.sheetMeta}>
+                La IA analizo el avance, las bitacoras, las evidencias y el estado actual para explicar esta grafica.
+              </Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.modalClose}>
+              <MaterialCommunityIcons name="close" size={21} color={instructorPalette.primary} />
+            </Pressable>
+          </View>
+          <View style={styles.graphExplanationBox}>
+            <Text style={styles.graphExplanationTitle}>Analisis IA del proyecto</Text>
+            <Text style={styles.graphExplanationText}>
+              El proyecto muestra {paceLabel}: {progress}% de progreso, estado {project?.inventory || 'pendiente'} y {evidenceLabel}. {riskLabel}
+            </Text>
+            <View style={styles.graphInsightGrid}>
+              <GraphInsight label="Barra 1" value="Avance real reportado del proyecto." />
+              <GraphInsight label="Barra 2" value="Trabajo pendiente o brecha de seguimiento." />
+              <GraphInsight label="Barra 3" value="Proyeccion IA si el ritmo actual se mantiene." />
+            </View>
+            <Text style={styles.graphExplanationText}>
+              Esta lectura no reemplaza tu criterio como instructor; resume señales para decidir si observar, reforzar o validar.
+            </Text>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function GraphInsight({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.graphInsightRow}>
+      <Text style={styles.graphInsightLabel}>{label}</Text>
+      <Text style={styles.graphInsightText}>{value}</Text>
+    </View>
+  );
+}
+
+function NewsAvatar({ name, photoUrl }: { name: string; photoUrl: string | null }) {
+  const initials = name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join('') || 'IN';
+
+  if (photoUrl) {
+    return <Image source={{ uri: photoUrl }} style={styles.newsAvatarImage} contentFit="cover" />;
+  }
+
+  return (
+    <View style={styles.newsAvatarFallback}>
+      <Text style={styles.newsAvatarText}>{initials}</Text>
+    </View>
+  );
+}
+
+function SheetDetailModal({
+  competenceRows,
+  learners,
+  learnersOpen,
+  learnerSearch,
+  onClose,
+  onLearnerSearch,
+  onSelectSheet,
+  onToggleLearners,
+  projects,
+  sheet,
+  sheetOverviews,
+  visible,
+}: {
+  competenceRows: { id: string; competence: RealCompetence; raps: RealRap[] }[];
+  learners: RealLearner[];
+  learnersOpen: boolean;
+  learnerSearch: string;
+  onClose: () => void;
+  onLearnerSearch: (value: string) => void;
+  onSelectSheet: (sheetId: string) => void;
+  onToggleLearners: () => void;
+  projects: RealProject[];
+  sheet?: RealSheet;
+  sheetOverviews: {
+    id: string;
+    code: string;
+    program: string;
+    trimester: string;
+    learners: number;
+    activeProjects: number;
+    progress: number;
+  }[];
+  visible: boolean;
+}) {
+  return (
+    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.sheetModal}>
+          <View style={styles.modalHeader}>
+            <View style={styles.alertCopy}>
+              <Text style={styles.dashboardEyebrow}>Ficha asignada</Text>
+              <Text style={styles.modalTitle}>{sheet ? `Ficha ${sheet.numero || sheet.id}` : 'Fichas asignadas'}</Text>
+              <Text style={styles.sheetMeta}>
+                {sheet ?
+                   `${sheet.programaNombre || 'Sin programa'} · ${sheet.trimestreActual || 'Sin trimestre'}`
+                  : 'Selecciona una ficha para ver competencias, RAP y aprendices.'}
+              </Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.modalClose}>
+              <MaterialCommunityIcons name="close" size={21} color={instructorPalette.primary} />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalContent}>
+            {!sheet ? (
+              <>
+                <Text style={styles.modalSectionTitle}>Selecciona una ficha</Text>
+                <View style={styles.stack}>
+                  {sheetOverviews.length ? sheetOverviews.map((item) => (
+                    <Pressable key={item.id} onPress={() => onSelectSheet(item.id)} style={styles.competenceCard}>
+                      <Text style={styles.alertTitle}>Ficha {item.code}</Text>
+                      <Text style={styles.alertText}>{item.program} · {item.trimester}</Text>
+                      <View style={styles.compactMetaRow}>
+                        <IconLabel icon="account-multiple-outline" text={`${item.learners} aprendices`} />
+                        <IconLabel icon="briefcase-outline" text={`${item.activeProjects} proyectos`} />
+                      </View>
+                    </Pressable>
+                  )) : (
+                    <View style={styles.emptyRequestCard}>
+                      <Text style={styles.alertText}>No tienes fichas asignadas.</Text>
+                    </View>
+                  )}
+                </View>
+              </>
+            ) : (
+            <>
+            <View style={styles.modalStatsRow}>
+              <ModalStat icon="account-multiple-outline" label="Aprendices" value={String(learners.length)} />
+              <ModalStat icon="briefcase-outline" label="Proyectos" value={String(projects.length)} />
+              <ModalStat icon="book-check-outline" label="RAP" value={String(competenceRows.reduce((total, row) => total + (row.raps?.length || 0), 0))} />
+            </View>
+
+            <Text style={styles.modalSectionTitle}>Competencias y RAP a cargo</Text>
+            <View style={styles.stack}>
+              {competenceRows.length ? competenceRows.map((row) => (
+                <View key={row.id} style={styles.competenceCard}>
+                  <Text style={styles.alertTitle}>
+                    {row.competence.codigo ? `${row.competence.codigo} · ` : ''}{row.competence.nombre || 'Competencia'}
+                  </Text>
+                  {row.raps?.length ? row.raps.map((rap) => (
+                    <Text key={rap.id} style={styles.alertText}>
+                      {rap.codigo ? `${rap.codigo}: ` : ''}{rap.descripcion || 'Resultado de aprendizaje'}
+                    </Text>
+                  )) : <Text style={styles.alertText}>Sin RAP específico registrado.</Text>}
+                </View>
+              )) : (
+                <View style={styles.emptyRequestCard}>
+                  <Text style={styles.alertText}>No hay competencias asignadas para esta ficha.</Text>
+                </View>
+              )}
+            </View>
+
+            <Pressable onPress={onToggleLearners} style={styles.learnersToggle}>
+              <Text style={styles.acceptButtonText}>{learnersOpen ? 'Ocultar aprendices' : 'Ver aprendices'}</Text>
+              <MaterialCommunityIcons name={learnersOpen ? 'chevron-up' : 'chevron-down'} size={20} color="#FFFFFF" />
+            </Pressable>
+
+            {learnersOpen ? (
+              <View style={styles.learnersPanel}>
+                <View style={styles.searchBox}>
+                  <MaterialCommunityIcons name="magnify" size={18} color={instructorPalette.textMuted} />
+                  <TextInput
+                    placeholder="Buscar aprendiz..."
+                    placeholderTextColor={instructorPalette.textMuted}
+                    value={learnerSearch}
+                    onChangeText={onLearnerSearch}
+                    style={styles.searchInput}
+                  />
+                </View>
+                {learners.length ? learners.map((learner) => (
+                  <View key={learner.id} style={styles.learnerRow}>
+                    <NewsAvatar name={learner.nombre || learner.correo || 'Aprendiz'} photoUrl={learner.photoUrl || null} />
+                    <View style={styles.alertCopy}>
+                      <Text style={styles.alertTitle}>{learner.nombre || 'Aprendiz'}</Text>
+                      <Text style={styles.alertText}>{learner.correo || 'Sin correo'}</Text>
+                    </View>
+                  </View>
+                )) : <Text style={styles.alertText}>No hay aprendices con esa búsqueda.</Text>}
+              </View>
+            ) : null}
+            </>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ModalStat({ icon, label, value }: { icon: any; label: string; value: string }) {
+  return (
+    <View style={styles.modalStat}>
+      <MaterialCommunityIcons name={icon} size={18} color={instructorPalette.primary} />
+      <Text style={styles.modalStatValue}>{value}</Text>
+      <Text style={styles.modalStatLabel}>{label}</Text>
     </View>
   );
 }
@@ -477,6 +947,19 @@ function AlertRow({ alert }: { alert: AlertItem }) {
       </View>
     </View>
   );
+}
+
+function getMillis(value: any) {
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
+
+function getDateMillis(value: string) {
+  if (!value) return 0;
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
 const styles = StyleSheet.create({
@@ -572,6 +1055,78 @@ const styles = StyleSheet.create({
     gap: 14,
     paddingVertical: 2,
   },
+  newsCarouselContent: {
+    gap: 12,
+    paddingHorizontal: 2,
+    paddingVertical: 3,
+  },
+  newsCard: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 16,
+    elevation: 1,
+    gap: 8,
+    minHeight: 150,
+    padding: 16,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    width: 230,
+  },
+  newsIcon: {
+    alignItems: 'center',
+    borderRadius: 20,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  newsCopy: {
+    gap: 2,
+    minWidth: 0,
+  },
+  newsType: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  newsTitle: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  newsText: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  newsAvatarImage: {
+    borderRadius: 22,
+    height: 44,
+    width: 44,
+  },
+  newsAvatarFallback: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.mint,
+    borderRadius: 22,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  newsAvatarText: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  projectCarousel: {
+    gap: 12,
+    paddingHorizontal: 2,
+    paddingVertical: 4,
+  },
+  projectSlide: {
+    width: 300,
+  },
   compactHeader: {
     alignItems: 'flex-start',
     flexDirection: 'row',
@@ -620,6 +1175,57 @@ const styles = StyleSheet.create({
   },
   compactMetaRow: {
     gap: 7,
+  },
+  requestCard: {
+    alignItems: 'flex-start',
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 22,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16,
+  },
+  requestIcon: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.mint,
+    borderRadius: 20,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  requestActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  acceptButton: {
+    backgroundColor: instructorPalette.primary,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+  },
+  acceptButtonText: {
+    color: '#FFFFFF',
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  rejectButton: {
+    backgroundColor: instructorPalette.peachSurface,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+  },
+  rejectButtonText: {
+    color: '#C97B63',
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  emptyRequestCard: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 18,
+    padding: 14,
   },
   sheetCard: {
     backgroundColor: instructorPalette.surface,
@@ -695,6 +1301,214 @@ const styles = StyleSheet.create({
   },
   projectMeta: {
     gap: 8,
+  },
+  advancedGraph: {
+    backgroundColor: '#F6FBF8',
+    borderColor: instructorPalette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 10,
+    marginTop: 2,
+    padding: 12,
+  },
+  graphHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  graphTitle: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  graphValue: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  graphBars: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+    gap: 8,
+    height: 64,
+  },
+  graphBarTrack: {
+    backgroundColor: '#E6F0EB',
+    borderRadius: 999,
+    flex: 1,
+    height: '100%',
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+  },
+  graphBarFill: {
+    borderRadius: 999,
+    minHeight: 8,
+  },
+  graphModalBackdrop: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(21, 42, 35, 0.34)',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
+  },
+  graphModalCard: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 24,
+    gap: 16,
+    maxWidth: 420,
+    padding: 18,
+    width: '100%',
+  },
+  graphExplanationBox: {
+    backgroundColor: instructorPalette.mint,
+    borderRadius: 18,
+    gap: 8,
+    padding: 14,
+  },
+  graphExplanationTitle: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  graphExplanationText: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  graphInsightGrid: {
+    gap: 7,
+  },
+  graphInsightRow: {
+    backgroundColor: instructorPalette.surface,
+    borderRadius: 14,
+    gap: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  graphInsightLabel: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  graphInsightText: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  modalBackdrop: {
+    backgroundColor: 'rgba(21, 42, 35, 0.34)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sheetModal: {
+    backgroundColor: instructorPalette.surface,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    maxHeight: '88%',
+    padding: 18,
+  },
+  modalHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalTitle: {
+    color: instructorPalette.dark,
+    fontFamily: 'SulphurPointBold',
+    fontSize: 26,
+    lineHeight: 28,
+  },
+  modalClose: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.mint,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  modalContent: {
+    gap: 15,
+    paddingBottom: 20,
+    paddingTop: 15,
+  },
+  modalStatsRow: {
+    flexDirection: 'row',
+    gap: 9,
+  },
+  modalStat: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.mint,
+    borderRadius: 16,
+    flex: 1,
+    gap: 3,
+    justifyContent: 'center',
+    minHeight: 78,
+    padding: 8,
+  },
+  modalStatValue: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 17,
+  },
+  modalStatLabel: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+  },
+  modalSectionTitle: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 14,
+  },
+  competenceCard: {
+    backgroundColor: '#F7FBF8',
+    borderColor: instructorPalette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 6,
+    padding: 12,
+  },
+  learnersToggle: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: instructorPalette.primary,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 14,
+  },
+  learnersPanel: {
+    gap: 10,
+  },
+  searchBox: {
+    alignItems: 'center',
+    backgroundColor: '#F7FBF8',
+    borderColor: instructorPalette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 42,
+    paddingHorizontal: 12,
+  },
+  searchInput: {
+    color: instructorPalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+  },
+  learnerRow: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.surface,
+    borderColor: instructorPalette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    padding: 10,
   },
   quickActionsRow: {
     flexDirection: 'row',

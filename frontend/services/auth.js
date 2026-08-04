@@ -6,6 +6,7 @@ import {
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
+  updateEmail,
   updateProfile,
 } from 'firebase/auth';
 import {
@@ -485,6 +486,7 @@ export async function actualizarPerfilUsuario(changes) {
   }
 
   const {
+    correo,
     nombre,
     programa,
     ficha,
@@ -504,6 +506,20 @@ export async function actualizarPerfilUsuario(changes) {
 
   if (typeof nombre === 'string') {
     profileUpdates.nombre = nombre.trim();
+  }
+
+  if (typeof correo === 'string') {
+    const normalizedEmail = correo.trim().toLowerCase();
+
+    if (!normalizedEmail) {
+      throw createFlowError('auth/invalid-email', 'Ingresa un correo válido para actualizar el perfil.');
+    }
+
+    if (normalizedEmail !== (currentUser.email || '').toLowerCase()) {
+      await updateEmail(currentUser, normalizedEmail);
+      profileUpdates.correo = normalizedEmail;
+      profileUpdates.correoVerificado = false;
+    }
   }
 
   if (typeof programa !== 'undefined') {

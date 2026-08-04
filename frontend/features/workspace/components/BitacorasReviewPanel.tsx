@@ -3,13 +3,23 @@ import { useEffect, useState } from 'react';
 import { Alert, Image, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 // @ts-ignore
-import { observarBitacora, revisarBitacora } from '@/services/bitacoras';
+import { eliminarObservacionBitacora, observarBitacora, revisarBitacora } from '@/services/bitacoras';
 
 type Evidence = {
   nombre?: string;
   mimeType?: string;
   base64?: string;
   url?: string;
+};
+
+type Observation = {
+  id?: string;
+  autorUid?: string;
+  autorNombre?: string;
+  autorRol?: string;
+  texto?: string;
+  creadoEn?: any;
+  actualizadoEn?: any;
 };
 
 type Bitacora = {
@@ -28,6 +38,7 @@ type Bitacora = {
   archivoUrl?: string;
   estado?: string;
   observacion?: string;
+  observaciones?: Observation[];
   revisadoPorUid?: string;
   revisadoPorNombre?: string;
   revisadoPorRol?: string;
@@ -35,6 +46,8 @@ type Bitacora = {
 
 type Props = {
   bitacoras: Bitacora[];
+  groupMemberNames?: string[];
+  isGroupProject?: boolean;
   mode?: 'review' | 'observation';
   session: AuthenticatedSession;
 };
@@ -47,9 +60,10 @@ const statusColors: Record<string, { background: string; color: string; label: s
   Borrador: { background: '#F1F3F4', color: '#5F6368', label: 'Borrador' },
 };
 
-export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Props) {
+export function BitacorasReviewPanel({ bitacoras, groupMemberNames = [], isGroupProject = false, mode = 'review', session }: Props) {
   const [selectedId, setSelectedId] = useState('');
   const [observacion, setObservacion] = useState('');
+  const [editingObservationId, setEditingObservationId] = useState('');
   const [feedback, setFeedback] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -64,14 +78,31 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
 
   const openBitacora = (bitacora: Bitacora) => {
     setSelectedId(bitacora.id);
-    setObservacion(bitacora.observacion || '');
+    setObservacion('');
+    setEditingObservationId('');
     setFeedback('');
   };
 
   const closeDetail = () => {
     setSelectedId('');
     setObservacion('');
+    setEditingObservationId('');
     setFeedback('');
+  };
+
+  const openAttachedFile = async (url?: string) => {
+    const fileUrl = normalizeFileUrl(url);
+
+    if (!fileUrl || !/^https?:\/\//i.test(fileUrl)) {
+      setFeedback('Este adjunto quedó guardado como archivo local. Vuelve a adjuntarlo para generar un enlace permanente.');
+      return;
+    }
+
+    try {
+      await Linking.openURL(fileUrl);
+    } catch (error) {
+      setFeedback('No pudimos abrir el archivo adjunto.');
+    }
   };
 
   const saveReview = async (estado: 'Aprobada' | 'Rechazada' | 'Correccion') => {
@@ -92,6 +123,7 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
       await revisarBitacora(selectedBitacora.id, {
         estado,
         observacion,
+        observacionId: editingObservationId,
         revisadoPorUid: session.uid,
         revisadoPorNombre: session.name,
         revisadoPorRol: session.role,
@@ -139,6 +171,7 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
     try {
       await observarBitacora(selectedBitacora.id, {
         observacion,
+        observacionId: editingObservationId,
         revisadoPorUid: session.uid,
         revisadoPorNombre: session.name,
         revisadoPorRol: session.role,
@@ -150,6 +183,39 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
     } finally {
       setSaving(false);
     }
+  };
+
+  const startEditObservation = (item: Observation) => {
+    setEditingObservationId(item.id || '');
+    setObservacion(item.texto || '');
+    setFeedback('');
+  };
+
+  const deleteObservation = (item: Observation) => {
+    if (!selectedBitacora?.id || !item.id) {
+      return;
+    }
+
+    Alert.alert('Eliminar observación', '¿Seguro que deseas eliminar esta observación', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await eliminarObservacionBitacora(selectedBitacora.id, item.id);
+            if (editingObservationId === item.id) {
+              setEditingObservationId('');
+              setObservacion('');
+            }
+            setFeedback('Observación eliminada.');
+          } catch (error) {
+            const typedError = error as { message: string };
+            setFeedback(typedError.message || 'No pudimos eliminar la observación.');
+          }
+        },
+      },
+    ]);
   };
 
   if (!bitacoras.length) {
@@ -166,6 +232,7 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
 
   if (selectedBitacora) {
     const status = getStatus(selectedBitacora.estado);
+    const observations = getBitacoraObservations(selectedBitacora);
 
     return (
       <View style={styles.detailCard}>
@@ -178,8 +245,13 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
           <View style={styles.detailCopy}>
             <Text style={styles.detailTitle}>{selectedBitacora.proyectoTitulo || 'Bitácora del proyecto'}</Text>
             <Text style={styles.detailMeta}>
-              {selectedBitacora.aprendizNombre || 'Aprendiz'} · {selectedBitacora.fecha || 'Sin fecha'}
+              {isGroupProject ? `Grupo: ${formatGroupMembers(groupMemberNames)}` : selectedBitacora.aprendizNombre || 'Aprendiz'} · {selectedBitacora.fecha || 'Sin fecha'}
             </Text>
+            {isGroupProject ? (
+              <Text style={styles.detailMeta}>
+                Publicada por {selectedBitacora.aprendizNombre || 'integrante del grupo'}
+              </Text>
+            ) : null}
           </View>
           <StatusBadge status={status} />
         </View>
@@ -215,7 +287,7 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
 
         {selectedBitacora.archivoUrl ? (
           <Pressable
-            onPress={() => Linking.openURL(selectedBitacora.archivoUrl || '')}
+            onPress={() => openAttachedFile(selectedBitacora.archivoUrl)}
             style={styles.fileButton}>
             <MaterialCommunityIcons name="file-document-outline" size={18} color="#117C72" />
             <Text numberOfLines={1} style={styles.fileButtonText}>
@@ -226,11 +298,41 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
         ) : null}
 
         <View style={styles.reviewBlock}>
+          <Text style={styles.reviewTitle}>Observaciones registradas</Text>
+          {observations.length ? observations.map((item) => {
+            const ownObservation = item.autorUid === session.uid;
+            return (
+              <View key={item.id || `${item.autorUid}-${item.texto}`} style={styles.observationCard}>
+                <View style={styles.observationHeader}>
+                  <View style={styles.cardCopy}>
+                    <Text style={styles.observationAuthor}>{item.autorNombre || 'Equipo académico'}</Text>
+                    <Text style={styles.observationRole}>{item.autorRol || 'Observación'}</Text>
+                  </View>
+                  {ownObservation ? (
+                    <View style={styles.observationActions}>
+                      <Pressable onPress={() => startEditObservation(item)} style={styles.iconButton}>
+                        <MaterialCommunityIcons name="pencil-outline" size={15} color="#117C72" />
+                      </Pressable>
+                      <Pressable onPress={() => deleteObservation(item)} style={styles.iconButton}>
+                        <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C45C43" />
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={styles.observationText}>{item.texto}</Text>
+              </View>
+            );
+          }) : (
+            <Text style={styles.reviewText}>Todavía no hay observaciones registradas.</Text>
+          )}
+        </View>
+
+        <View style={styles.reviewBlock}>
           <Text style={styles.reviewTitle}>{mode === 'observation' ? 'Observación del pasante' : 'Revisión del instructor'}</Text>
           <Text style={styles.reviewText}>
             {mode === 'observation'
-              ? 'Registra una observación técnica. El estado de aprobación queda a cargo del instructor.'
-              : 'Registra una observación clara antes de aprobar, desaprobar o solicitar corrección.'}
+              ? 'Registra una observacion tecnica. El estado de aprobacion queda a cargo del instructor.'
+              : 'Registra una observacion clara antes de aprobar, desaprobar o solicitar correccion.'}
           </Text>
           <TextInput
             multiline
@@ -285,6 +387,7 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
     <View style={styles.stack}>
       {bitacoras.map((bitacora) => {
         const status = getStatus(bitacora.estado);
+        const evidenceCount = bitacora.evidencias?.length || 0;
         return (
           <Pressable key={bitacora.id} onPress={() => openBitacora(bitacora)} style={styles.bitacoraCard}>
             <View style={styles.cardHeader}>
@@ -292,14 +395,32 @@ export function BitacorasReviewPanel({ bitacoras, mode = 'review', session }: Pr
                 <MaterialCommunityIcons name="notebook-edit-outline" size={20} color="#117C72" />
               </View>
               <View style={styles.cardCopy}>
-                <Text style={styles.cardTitle}>{bitacora.aprendizNombre || 'Aprendiz'}</Text>
+                <Text style={styles.cardTitle}>
+                  {isGroupProject ? 'Bitácora grupal' : bitacora.aprendizNombre || 'Aprendiz'}
+                </Text>
                 <Text style={styles.cardMeta}>{bitacora.fecha || 'Sin fecha'}</Text>
+                {isGroupProject ? (
+                  <>
+                    <Text style={styles.cardMeta}>Publicada por {bitacora.aprendizNombre || 'integrante del grupo'}</Text>
+                    <Text style={styles.cardMeta}>Integrantes: {formatGroupMembers(groupMemberNames)}</Text>
+                  </>
+                ) : null}
               </View>
               <StatusBadge status={status} />
             </View>
             <Text numberOfLines={2} style={styles.cardText}>
               {bitacora.descripcion || 'Sin descripción registrada.'}
             </Text>
+            <View style={styles.deliveryMetaRow}>
+              <View style={styles.deliveryMetaPill}>
+                <MaterialCommunityIcons name="image-outline" size={14} color="#117C72" />
+                <Text style={styles.deliveryMetaText}>{evidenceCount} foto{evidenceCount === 1 ? '' : 's'}</Text>
+              </View>
+              <View style={styles.deliveryMetaPill}>
+                <MaterialCommunityIcons name="file-document-outline" size={14} color="#117C72" />
+                <Text style={styles.deliveryMetaText}>{bitacora.archivoUrl ? 'Documento adjunto' : 'Sin documento'}</Text>
+              </View>
+            </View>
             <View style={styles.openRow}>
               <Text style={styles.openText}>Ver información completa</Text>
               <MaterialCommunityIcons name="chevron-right" size={19} color="#117C72" />
@@ -331,6 +452,24 @@ function DetailSection({
   );
 }
 
+function getBitacoraObservations(bitacora: Bitacora): Observation[] {
+  if (Array.isArray(bitacora.observaciones) && bitacora.observaciones.length) {
+    return bitacora.observaciones;
+  }
+
+  if (!bitacora.observacion) {
+    return [];
+  }
+
+  return [{
+    id: 'legacy-observacion',
+    autorUid: bitacora.revisadoPorUid,
+    autorNombre: bitacora.revisadoPorNombre,
+    autorRol: bitacora.revisadoPorRol,
+    texto: bitacora.observacion,
+  }];
+}
+
 function ReviewButton({
   color,
   disabled,
@@ -352,6 +491,10 @@ function ReviewButton({
   );
 }
 
+function formatGroupMembers(groupMemberNames: string[]) {
+  return groupMemberNames.length ? groupMemberNames.join(', ') : 'Sin integrantes registrados';
+}
+
 function StatusBadge({ status }: { status: { background: string; color: string; label: string } }) {
   return (
     <View style={[styles.statusBadge, { backgroundColor: status.background }]}>
@@ -366,8 +509,34 @@ function getStatus(status?: string) {
 
 function getImageUri(evidence: Evidence) {
   if (evidence.base64?.startsWith('data:image')) return evidence.base64;
-  if (evidence.url && evidence.mimeType?.startsWith('image/')) return evidence.url;
+  if (evidence.url && (evidence.mimeType || '').startsWith('image/')) return evidence.url;
   return undefined;
+}
+
+function normalizeFileUrl(url?: string | null) {
+  let cleanUrl = String(url || '').trim();
+
+  if (!cleanUrl) {
+    return '';
+  }
+
+  cleanUrl = cleanUrl
+    .replace(/^https?:\/(?!\/)/i, (match) => `${match}/`)
+    .replace(/^https?:\/\/https?:\/\//i, 'https://');
+
+  if (/^\/\//.test(cleanUrl)) {
+    return `https:${cleanUrl}`;
+  }
+
+  if (/^https?:\/\//i.test(cleanUrl)) {
+    return cleanUrl;
+  }
+
+  if (/supabase\.co/i.test(cleanUrl)) {
+    return `https://${cleanUrl}`;
+  }
+
+  return cleanUrl;
 }
 
 const styles = StyleSheet.create({
@@ -393,19 +562,21 @@ const styles = StyleSheet.create({
   },
   bitacoraCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 22,
+    borderColor: '#D7F2EB',
+    borderRadius: 20,
+    borderWidth: 1,
     elevation: 2,
-    gap: 10,
-    padding: 16,
+    gap: 13,
+    padding: 22,
     shadowColor: '#0B2F2B',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.07,
     shadowRadius: 8,
   },
   cardHeader: {
-    alignItems: 'center',
+    alignItems: 'flex-start',
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
   },
   cardIcon: {
     alignItems: 'center',
@@ -425,6 +596,7 @@ const styles = StyleSheet.create({
     color: '#117C72',
     fontFamily: 'PoppinsMedium',
     fontSize: 10,
+    lineHeight: 15,
   },
   cardText: {
     color: '#52645E',
@@ -432,10 +604,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
+  deliveryMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  deliveryMetaPill: {
+    alignItems: 'center',
+    backgroundColor: '#F4FAF8',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+  },
+  deliveryMetaText: {
+    color: '#117C72',
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 10,
+  },
   openRow: {
     alignItems: 'center',
+    backgroundColor: '#F4FAF8',
+    borderRadius: 14,
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   openText: {
     color: '#117C72',
@@ -453,10 +648,10 @@ const styles = StyleSheet.create({
   },
   detailCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 26,
+    borderRadius: 22,
     elevation: 3,
-    gap: 15,
-    padding: 17,
+    gap: 16,
+    padding: 24,
     shadowColor: '#0B2F2B',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
@@ -498,8 +693,8 @@ const styles = StyleSheet.create({
   detailSection: {
     backgroundColor: '#F4FAF8',
     borderRadius: 16,
-    gap: 7,
-    padding: 13,
+    gap: 8,
+    padding: 16,
   },
   detailSectionHeader: {
     alignItems: 'center',
@@ -553,8 +748,8 @@ const styles = StyleSheet.create({
   reviewBlock: {
     borderTopColor: '#D7F2EB',
     borderTopWidth: 1,
-    gap: 10,
-    paddingTop: 15,
+    gap: 12,
+    paddingTop: 18,
   },
   reviewTitle: {
     color: '#173B35',
@@ -566,6 +761,48 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 11,
     lineHeight: 17,
+  },
+  observationCard: {
+    backgroundColor: '#F4FAF8',
+    borderLeftColor: '#117C72',
+    borderLeftWidth: 3,
+    borderRadius: 14,
+    gap: 7,
+    padding: 11,
+  },
+  observationHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  observationAuthor: {
+    color: '#173B35',
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  observationRole: {
+    color: '#7A8B84',
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+  },
+  observationText: {
+    color: '#52645E',
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  observationActions: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  iconButton: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 999,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
   },
   textArea: {
     backgroundColor: '#F4FAF8',

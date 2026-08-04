@@ -25,6 +25,7 @@ const RESULTADOS_COLLECTION = 'resultadosAprendizaje';
 const ASIGNACIONES_COMPETENCIAS_COLLECTION = 'asignacionesCompetencias';
 const PROYECTOS_COLLECTION = 'proyectos';
 const GRUPOS_COLLECTION = 'gruposTrabajo';
+const PROJECT_FILES_BUCKET = process.env.EXPO_PUBLIC_PROJECT_FILES_BUCKET || 'biomind-project-files';
 
 function now() {
   return new Date();
@@ -32,6 +33,118 @@ function now() {
 
 function cleanText(value) {
   return String(value || '').trim();
+}
+
+function isPublicFileUri(uri) {
+  return /^https:\/\//i.test(uri) || /^data:/i.test(uri);
+}
+
+function getExternalFilesStorageConfig() {
+  const supabaseUrl = cleanText(process.env.EXPO_PUBLIC_SUPABASE_URL).replace(/\/+$/g, '');
+  const supabaseAnonKey = cleanText(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error(
+      'Falta configurar el almacenamiento externo de archivos. Agrega EXPO_PUBLIC_SUPABASE_URL y EXPO_PUBLIC_SUPABASE_ANON_KEY para subir archivos sin usar Firebase Storage.'
+    );
+  }
+
+  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl)) {
+    throw new Error('La URL de Supabase configurada no es valida. Revisa EXPO_PUBLIC_SUPABASE_URL en frontend/.env.');
+  }
+
+  return { supabaseAnonKey, supabaseUrl };
+}
+
+function safeFileName(name, fallback = 'archivo') {
+  const normalized = cleanText(name)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return normalized || fallback;
+}
+
+async function uploadProjectAttachment(archivo, projectId, index) {
+  const nombre = cleanText(archivo.nombre) || `Archivo ${index + 1}`;
+  const uri = cleanText(archivo.uri || archivo.url);
+  const mimeType = cleanText(archivo.mimeType) || 'application/octet-stream';
+  const ruta = cleanText(archivo.ruta);
+
+  if (!uri) {
+    return null;
+  }
+
+  if (isPublicFileUri(uri)) {
+    return {
+      nombre,
+      uri,
+      url: uri,
+      mimeType,
+      ruta: ruta || null,
+    };
+  }
+
+  const { supabaseAnonKey, supabaseUrl } = getExternalFilesStorageConfig();
+  const blob = await readLocalFileAsBlob(uri, nombre);
+  const path = `proyectos/${projectId}/${Date.now()}-${index}-${safeFileName(nombre)}`;
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/${PROJECT_FILES_BUCKET}/${path}`;
+  let uploadResponse;
+
+  try {
+    uploadResponse = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`,
+        'Content-Type': mimeType,
+      },
+      body: blob,
+    });
+  } catch {
+    throw new Error('No pudimos subir el archivo porque la URL de Supabase configurada no responde. Revisa EXPO_PUBLIC_SUPABASE_URL en frontend/.env.');
+  }
+
+  if (!uploadResponse.ok) {
+    let detail = '';
+
+    try {
+      const responseBody = await uploadResponse.json();
+      detail = responseBody.message || responseBody.error || '';
+    } catch {
+      detail = await uploadResponse.text();
+    }
+
+    throw new Error(
+      `No pudimos subir el archivo al almacenamiento externo (${uploadResponse.status}). ${detail || 'Revisa el bucket y las políticas de Supabase.'}`
+    );
+  }
+
+  const downloadUrl = `${supabaseUrl}/storage/v1/object/public/${PROJECT_FILES_BUCKET}/${path}`;
+
+  return {
+    nombre,
+    uri: downloadUrl,
+    url: downloadUrl,
+    mimeType,
+    ruta: path,
+  };
+}
+
+function readLocalFileAsBlob(uri, nombre) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.onload = () => {
+      resolve(request.response);
+    };
+    request.onerror = () => {
+      reject(new Error(`No pudimos leer el archivo ${nombre}. Intenta seleccionarlo nuevamente.`));
+    };
+    request.responseType = 'blob';
+    request.open('GET', uri, true);
+    request.send(null);
+  });
 }
 
 function normalizeDate(value) {
@@ -68,9 +181,9 @@ function isActive(record) {
 
 function getAssignedSheetValues(session) {
   return [
-    session?.ficha,
-    session?.fichaId,
-    ...(Array.isArray(session?.fichasAsignadas) ? session.fichasAsignadas : []),
+    session.ficha,
+    session.fichaId,
+    ...(Array.isArray(session.fichasAsignadas) ? session.fichasAsignadas : []),
   ]
     .map((value) => cleanText(value))
     .filter(Boolean);
@@ -78,7 +191,7 @@ function getAssignedSheetValues(session) {
 
 function sessionMatchesSheet(session, ficha) {
   const assignedValues = new Set(getAssignedSheetValues(session));
-  const sheetValues = [ficha?.id, ficha?.numero].map((value) => cleanText(value)).filter(Boolean);
+  const sheetValues = [ficha.id, ficha.numero].map((value) => cleanText(value)).filter(Boolean);
 
   return sheetValues.some((value) => assignedValues.has(value));
 }
@@ -170,21 +283,31 @@ export function escucharContextoAcademicoUsuario(session, onData, onError) {
   };
 
   const emit = () => {
-    const role = cleanText(session?.role).toLowerCase();
+    const role = cleanText(session.role).toLowerCase();
+    const liveUser = state.usuarios.find((user) => user.id === session.uid);
+    const effectiveSession = liveUser
+      ? {
+        ...session,
+        ficha: liveUser.ficha,
+        fichaId: liveUser.fichaId,
+        fichasAsignadas: liveUser.fichasAsignadas,
+        instructorUid: liveUser.instructorUid,
+      }
+      : session;
 
     const fichas = state.fichas.filter((ficha) => {
       if (role === 'aprendiz') {
-        return sessionMatchesSheet(session, ficha);
+        return sessionMatchesSheet(effectiveSession, ficha);
       }
 
       if (role === 'instructor') {
-        return sessionMatchesSheet(session, ficha) || (ficha.instructorUids || []).includes(session?.uid);
+        return sessionMatchesSheet(effectiveSession, ficha) || (ficha.instructorUids || []).includes(session?.uid);
       }
 
       if (role === 'pasante') {
-        return sessionMatchesSheet(session, ficha)
-          || (ficha.pasantesUids || []).includes(session?.uid)
-          || (session?.instructorUid && (ficha.instructorUids || []).includes(session.instructorUid));
+        return sessionMatchesSheet(effectiveSession, ficha)
+          || (ficha.pasantesUids || []).includes(session.uid)
+          || (effectiveSession.instructorUid && (ficha.instructorUids || []).includes(effectiveSession.instructorUid));
       }
 
       return false;
@@ -205,7 +328,8 @@ export function escucharContextoAcademicoUsuario(session, onData, onError) {
       resultados: state.resultados.filter((resultado) => competenciaIds.has(resultado.competenciaId) && isActive(resultado)),
       instructores: state.usuarios.filter((user) => instructorIds.has(user.id)),
       aprendices: state.usuarios.filter((user) => fichaIds.has(user.fichaId) && cleanText(user.rol).toLowerCase() === 'aprendiz'),
-      pasantes: state.usuarios.filter((user) => user.instructorUid === session?.uid && cleanText(user.rol).toLowerCase() === 'pasante'),
+      solicitudesFicha: state.usuarios.filter((user) => fichaIds.has(user.fichaSolicitudId) && cleanText(user.rol).toLowerCase() === 'aprendiz'),
+      pasantes: state.usuarios.filter((user) => user.instructorUid === session.uid && cleanText(user.rol).toLowerCase() === 'pasante'),
     });
   };
 
@@ -467,16 +591,99 @@ export async function asignarAprendizAFicha({ aprendiz, ficha }) {
     throw new Error('Selecciona una ficha valida.');
   }
 
-  await updateDoc(doc(db, USUARIOS_COLLECTION, aprendiz.id), {
+  const previousFichaId = cleanText(aprendiz.fichaId);
+  const nextFichaId = cleanText(ficha.id);
+  const batch = writeBatch(db);
+
+  if (previousFichaId && previousFichaId !== nextFichaId) {
+    const previousProjectsSnapshot = await getDocs(
+      query(
+        collection(db, PROYECTOS_COLLECTION),
+        where('fichaId', '==', previousFichaId),
+        where('aprendizIds', 'array-contains', aprendiz.id)
+      )
+    );
+    previousProjectsSnapshot.docs.forEach((item) => {
+      batch.update(item.ref, {
+        aprendizIds: arrayRemove(aprendiz.id),
+        actualizadoEn: now(),
+      });
+    });
+
+    const previousGroupsSnapshot = await getDocs(
+      query(
+        collection(db, GRUPOS_COLLECTION),
+        where('fichaId', '==', previousFichaId),
+        where('aprendizIds', 'array-contains', aprendiz.id)
+      )
+    );
+    previousGroupsSnapshot.docs.forEach((item) => {
+      batch.update(item.ref, {
+        aprendizIds: arrayRemove(aprendiz.id),
+        actualizadoEn: now(),
+      });
+    });
+
+    const previousBitacorasSnapshot = await getDocs(
+      query(
+        collection(db, 'bitacoras'),
+        where('aprendizUid', '==', aprendiz.id),
+        where('fichaId', '==', previousFichaId)
+      )
+    );
+    previousBitacorasSnapshot.docs.forEach((item) => {
+      batch.delete(item.ref);
+    });
+  }
+
+  batch.update(doc(db, USUARIOS_COLLECTION, aprendiz.id), {
     fichaId: ficha.id,
     ficha: ficha.numero || ficha.id,
     programaId: ficha.programaId || null,
     programa: ficha.programaNombre || null,
+    fichaSolicitudId: deleteField(),
+    fichaSolicitudNumero: deleteField(),
+    fichaSolicitudPrograma: deleteField(),
+    fichaSolicitudEstado: deleteField(),
     trimestreActual: ficha.trimestreActual || null,
     trimestreId: ficha.trimestreId || null,
     trimestreNumero: ficha.trimestreNumero || null,
     trimestreFechaInicio: ficha.trimestreFechaInicio || null,
     trimestreFechaFin: ficha.trimestreFechaFin || null,
+    actualizadoEn: now(),
+  });
+
+  await batch.commit();
+}
+
+export async function solicitarFichaAprendiz({ aprendizUid, ficha }) {
+  if (!aprendizUid) {
+    throw new Error('No encontramos el aprendiz activo.');
+  }
+
+  if (!ficha.id) {
+    throw new Error('Selecciona una ficha válida.');
+  }
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, aprendizUid), {
+    fichaSolicitudId: ficha.id,
+    fichaSolicitudNumero: ficha.numero || ficha.id,
+    fichaSolicitudPrograma: ficha.programaNombre || null,
+    fichaSolicitudEstado: 'Pendiente',
+    actualizadoEn: now(),
+  });
+}
+
+export async function rechazarSolicitudFicha(aprendizUid) {
+  if (!aprendizUid) {
+    throw new Error('Selecciona un aprendiz válido.');
+  }
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, aprendizUid), {
+    fichaSolicitudId: deleteField(),
+    fichaSolicitudNumero: deleteField(),
+    fichaSolicitudPrograma: deleteField(),
+    fichaSolicitudEstado: 'Rechazada',
     actualizadoEn: now(),
   });
 }
@@ -808,28 +1015,60 @@ export async function activarResultadoAprendizaje(id) {
   });
 }
 
-export async function asignarCompetenciaInstructor({ instructorUid, fichaId, competenciaId }) {
-  if (!instructorUid || !fichaId || !competenciaId) {
-    throw new Error('Selecciona instructor, ficha y competencia.');
+export async function asignarCompetenciaInstructor({ instructorUid, fichaId, competenciaId, resultadoId }) {
+  if (!instructorUid || !fichaId || !competenciaId || !resultadoId) {
+    throw new Error('Selecciona instructor, ficha, competencia y RAP.');
   }
 
   const rapSnapshot = await getDocs(
     query(collection(db, RESULTADOS_COLLECTION), where('competenciaId', '==', competenciaId))
   );
   const activeRap = mapSnapshot(rapSnapshot).filter(isActive);
+  const selectedRap = activeRap.find((rap) => rap.id === resultadoId);
 
-  if (!activeRap.length) {
-    throw new Error('Esta competencia no tiene RAP activos. Crea al menos uno antes de asignarla.');
+  if (!selectedRap) {
+    throw new Error('Selecciona un RAP activo de esta competencia.');
+  }
+
+  const existingSnapshot = await getDocs(
+    query(
+      collection(db, ASIGNACIONES_COMPETENCIAS_COLLECTION),
+      where('fichaId', '==', fichaId),
+      where('resultadoId', '==', resultadoId)
+    )
+  );
+  const legacyExistingSnapshot = await getDocs(
+    query(
+      collection(db, ASIGNACIONES_COMPETENCIAS_COLLECTION),
+      where('fichaId', '==', fichaId),
+      where('resultadoIds', 'array-contains', resultadoId)
+    )
+  );
+  const repeatedRap = [...mapSnapshot(existingSnapshot), ...mapSnapshot(legacyExistingSnapshot)].find(isActive);
+
+  if (repeatedRap) {
+    throw new Error('Este RAP ya está asignado para esta ficha. Puedes asignar la misma competencia solo si eliges un RAP diferente.');
   }
 
   await addDoc(collection(db, ASIGNACIONES_COMPETENCIAS_COLLECTION), {
     instructorUid,
     fichaId,
     competenciaId,
-    resultadoIds: activeRap.map((rap) => rap.id),
+    resultadoId,
+    resultadoIds: [resultadoId],
     activo: true,
     estado: 'Activa',
     creadoEn: now(),
+    actualizadoEn: now(),
+  });
+
+  await updateDoc(doc(db, FICHAS_COLLECTION, fichaId), {
+    instructorUids: arrayUnion(instructorUid),
+    actualizadoEn: now(),
+  });
+
+  await updateDoc(doc(db, USUARIOS_COLLECTION, instructorUid), {
+    fichasAsignadas: arrayUnion(fichaId),
     actualizadoEn: now(),
   });
 }
@@ -911,10 +1150,24 @@ export async function guardarProyectoAcademico(proyecto) {
   const asignacionTipo = proyecto.asignacionTipo === 'grupo' ? 'grupo' : 'aprendices';
   const aprendizIds = Array.isArray(proyecto.aprendizIds) ? proyecto.aprendizIds.filter(Boolean) : [];
   const grupoId = cleanText(proyecto.grupoId);
+  const projectRef = proyecto.id
+    ? doc(db, PROYECTOS_COLLECTION, proyecto.id)
+    : doc(collection(db, PROYECTOS_COLLECTION));
   const archivoNombre = cleanText(proyecto.archivoNombre);
   const archivoUri = cleanText(proyecto.archivoUri);
   const archivoMimeType = cleanText(proyecto.archivoMimeType);
-
+  const bitacorasEsperadas = Number(proyecto.bitacorasEsperadas || 0);
+  const archivosBase = Array.isArray(proyecto.archivos)
+    ? proyecto.archivos
+      .map((archivo) => ({
+        nombre: cleanText(archivo.nombre),
+        uri: cleanText(archivo.uri || archivo.url),
+        url: cleanText(archivo.url || archivo.uri),
+        mimeType: cleanText(archivo.mimeType),
+        ruta: cleanText(archivo.ruta),
+      }))
+      .filter((archivo) => archivo.nombre || archivo.uri)
+    : [];
   if (!titulo) {
     throw new Error('Falta el nombre del proyecto.');
   }
@@ -935,6 +1188,11 @@ export async function guardarProyectoAcademico(proyecto) {
     throw new Error('Selecciona al menos un aprendiz.');
   }
 
+  const archivos = (await Promise.all(
+    archivosBase.map((archivo, index) => uploadProjectAttachment(archivo, projectRef.id, index))
+  )).filter(Boolean);
+  const firstFile = archivos[0];
+
   const payload = {
     titulo,
     descripcion,
@@ -948,9 +1206,11 @@ export async function guardarProyectoAcademico(proyecto) {
     asignacionTipo,
     aprendizIds: asignacionTipo === 'aprendices' ? aprendizIds : [],
     grupoId: asignacionTipo === 'grupo' ? grupoId : null,
-    archivoNombre: archivoNombre || null,
-    archivoUri: archivoUri || null,
-    archivoMimeType: archivoMimeType || null,
+    archivoNombre: firstFile?.nombre || archivoNombre || null,
+    archivoUri: firstFile?.uri || archivoUri || null,
+    archivoMimeType: firstFile?.mimeType || archivoMimeType || null,
+    archivos,
+    bitacorasEsperadas: Number.isFinite(bitacorasEsperadas) && bitacorasEsperadas > 0 ? bitacorasEsperadas : null,
     estado: proyecto.estado || 'Pendiente',
     progreso: Number(proyecto.progreso || 0),
     activo: proyecto.activo ?? true,
@@ -958,11 +1218,11 @@ export async function guardarProyectoAcademico(proyecto) {
   };
 
   if (proyecto.id) {
-    await updateDoc(doc(db, PROYECTOS_COLLECTION, proyecto.id), payload);
+    await updateDoc(projectRef, payload);
     return;
   }
 
-  await addDoc(collection(db, PROYECTOS_COLLECTION), {
+  await setDoc(projectRef, {
     ...payload,
     creadoEn: now(),
   });
@@ -984,3 +1244,4 @@ export async function cambiarEstadoProyecto(proyectoId, estado) {
 
   await updateDoc(doc(db, PROYECTOS_COLLECTION, proyectoId), payload);
 }
+

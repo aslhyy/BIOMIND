@@ -205,7 +205,7 @@ function TabButton({
         size={24}
         color={active ? tone.activeIcon : tone.inactiveIcon}
       />
-      {active && <View style={[styles.activePill, { backgroundColor: tone.activePill }]} />}
+      {active ? <View style={[styles.activePill, { backgroundColor: tone.activePill }]} /> : null}
     </Pressable>
   );
 }

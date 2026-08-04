@@ -11,6 +11,10 @@ export type AuthenticatedSession = {
   programa?: string | null;
   fichaId?: string | null;
   ficha?: string | null;
+  fichaSolicitudId?: string | null;
+  fichaSolicitudNumero?: string | null;
+  fichaSolicitudEstado?: string | null;
+  fichaSolicitudPrograma?: string | null;
   fichasAsignadas?: string[];
   instructorUid?: string | null;
   trimestreActual?: string | null;
@@ -49,4 +53,13 @@ export type WorkspaceChatMessage = {
   authorRole?: string;
   createdAt?: string;
   inputMode?: 'manual' | 'voice';
+};
+
+export type WorkspaceAssistantConversation = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  messages: WorkspaceChatMessage[];
 };

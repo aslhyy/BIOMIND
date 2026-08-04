@@ -1,7 +1,8 @@
 import type {
-    AuthenticatedSession,
-    WorkspaceChatChannel,
-    WorkspaceChatMessage,
+  AuthenticatedSession,
+  WorkspaceAssistantConversation,
+  WorkspaceChatChannel,
+  WorkspaceChatMessage,
 } from '@/features/workspace/types';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
@@ -42,7 +43,12 @@ export function subscribeToProjectMessages(
     session: AuthenticatedSession;
     chatChannel?: WorkspaceChatChannel;
   },
-  onChange: (payload: { assistantQuestionsEnabled?: boolean; messages: WorkspaceChatMessage[] } | null) => void
+  onChange: (payload: {
+    activeConversationId?: string;
+    assistantQuestionsEnabled?: boolean;
+    conversations?: WorkspaceAssistantConversation[];
+    messages: WorkspaceChatMessage[];
+  } | null) => void
 ) {
   const chatRef = doc(
     db,
@@ -59,9 +65,24 @@ export function subscribeToProjectMessages(
       }
 
       const data = snapshot.data();
+      const legacyMessages = Array.isArray(data.messages) ? data.messages : [];
+      const conversations = Array.isArray(data.conversations) ? data.conversations : [];
       onChange({
         assistantQuestionsEnabled: Boolean(data.assistantQuestionsEnabled),
-        messages: Array.isArray(data.messages) ? data.messages : [],
+        activeConversationId: data.activeConversationId,
+        conversations: conversations.length
+          ? conversations
+          : legacyMessages.length
+            ? [{
+              id: 'principal',
+              title: 'Conversación principal',
+              createdAt: data.createdAt?.toDate?.()?.toISOString?.() || new Date().toISOString(),
+              updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || new Date().toISOString(),
+              messageCount: legacyMessages.length,
+              messages: legacyMessages,
+            }]
+            : [],
+        messages: legacyMessages,
       });
     },
     () => onChange(null)
@@ -70,22 +91,43 @@ export function subscribeToProjectMessages(
 
 export async function saveProjectMessages({
   assistantQuestionsEnabled,
+  conversationId,
+  conversationTitle,
   messages,
   projectId,
   projectTitle,
   session,
   chatChannel,
+  existingConversations = [],
 }: {
   assistantQuestionsEnabled: boolean;
+  conversationId?: string;
+  conversationTitle?: string;
   messages: WorkspaceChatMessage[];
   projectId: string;
   projectTitle: string;
   session: AuthenticatedSession;
   chatChannel?: WorkspaceChatChannel;
+  existingConversations?: WorkspaceAssistantConversation[];
 }) {
   const chatId = buildProjectChatId({ projectId, session, chatChannel });
   const chatRef = doc(db, MENSAJES_COLLECTION, chatId);
   const lastMessage = messages[messages.length - 1];
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const activeConversationId = conversationId || 'principal';
+  const nextConversation: WorkspaceAssistantConversation = {
+    id: activeConversationId,
+    title: conversationTitle || 'Conversación nueva',
+    createdAt: existingConversations.find((item) => item.id === activeConversationId)?.createdAt || nowIso,
+    updatedAt: nowIso,
+    messageCount: messages.length,
+    messages,
+  };
+  const conversations = [
+    nextConversation,
+    ...existingConversations.filter((item) => item.id !== activeConversationId),
+  ];
 
   await setDoc(
     chatRef,
@@ -99,10 +141,12 @@ export async function saveProjectMessages({
       projectId,
       projectTitle,
       assistantQuestionsEnabled,
+      activeConversationId,
+      conversations,
       messageCount: messages.length,
       lastMessagePreview: lastMessage?.text || '',
-      updatedAt: new Date(),
-      createdAt: new Date(),
+      updatedAt: now,
+      createdAt: now,
       messages,
     },
     { merge: true }

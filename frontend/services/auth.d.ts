@@ -28,6 +28,7 @@ export interface ReenviarCorreoResponse {
 }
 
 export interface ActualizarPerfilChanges {
+    correo?: string;
     nombre?: string;
     programa?: string | null;
     ficha?: string | null;

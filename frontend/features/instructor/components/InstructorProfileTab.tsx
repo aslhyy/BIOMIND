@@ -1,49 +1,92 @@
 import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { instructorProfile } from '../data';
 import { instructorPalette } from '../theme';
 import { ProgressBar, SectionHeading } from './InstructorUI';
 import { actualizarPerfilUsuario } from '@/services/auth';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { useAssignedSheetLabels } from '@/features/workspace/components/RealAcademicContext';
 import type { AuthenticatedSession } from '@/features/workspace/types';
+// @ts-ignore
+import { escucharBitacoras } from '@/services/bitacoras';
+
+type InstructorBitacora = {
+  estado?: string;
+  fichaId?: string;
+  observacion?: string;
+  observaciones?: unknown[];
+  revisadoPorUid?: string | null;
+};
 
 export function InstructorProfileTab({
-  autoFeedbackEnabled,
-  dualAssistantEnabled,
-  offlineEnabled,
   session,
+  showHomeNews,
+  showHomeProjects,
   voiceEnabled,
-  onAutoFeedbackChange,
-  onDualAssistantChange,
-  onOfflineChange,
+  onShowHomeNewsChange,
+  onShowHomeProjectsChange,
   onSignOut,
   onVoiceChange,
 }: {
-  autoFeedbackEnabled: boolean;
-  dualAssistantEnabled: boolean;
-  offlineEnabled: boolean;
   session: AuthenticatedSession;
+  showHomeNews: boolean;
+  showHomeProjects: boolean;
   voiceEnabled: boolean;
-  onAutoFeedbackChange: (value: boolean) => void;
-  onDualAssistantChange: (value: boolean) => void;
-  onOfflineChange: (value: boolean) => void;
+  onShowHomeNewsChange: (value: boolean) => void;
+  onShowHomeProjectsChange: (value: boolean) => void;
   onSignOut: () => Promise<void> | void;
   onVoiceChange: (value: boolean) => void;
 }) {
   const [name, setName] = useState(session.name);
+  const [email, setEmail] = useState(session.email);
   const [photoUri, setPhotoUri] = useState(session.photoUrl || '');
   const [photoBase64, setPhotoBase64] = useState('');
   const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const [bitacoras, setBitacoras] = useState<InstructorBitacora[]>([]);
   const assignedSheetLabels = useAssignedSheetLabels(session);
+  const assignedSheetValues = useMemo(
+    () => new Set([
+      session.ficha,
+      session.fichaId,
+      ...(Array.isArray(session.fichasAsignadas) ? session.fichasAsignadas : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean)),
+    [session.ficha, session.fichaId, session.fichasAsignadas]
+  );
+  const visibleBitacoras = useMemo(
+    () => bitacoras.filter((bitacora) => {
+      const fichaId = String(bitacora.fichaId || '').trim();
+      return assignedSheetValues.size ? assignedSheetValues.has(fichaId) : bitacora.revisadoPorUid === session.uid;
+    }),
+    [assignedSheetValues, bitacoras, session.uid]
+  );
+  const reviewedBitacoras = useMemo(
+    () => visibleBitacoras.filter((bitacora) => {
+      const estado = String(bitacora.estado || '').trim();
+      return ['Aprobada', 'Rechazada', 'Correccion'].includes(estado)
+        || bitacora.revisadoPorUid === session.uid
+        || Boolean(String(bitacora.observacion || '').trim())
+        || Boolean(Array.isArray(bitacora.observaciones) && bitacora.observaciones.length);
+    }),
+    [session.uid, visibleBitacoras]
+  );
+  const academicProgress = visibleBitacoras.length
+    ? Math.round((reviewedBitacoras.length / visibleBitacoras.length) * 100)
+    : 0;
 
   useEffect(() => {
     setName(session.name);
+    setEmail(session.email);
     setPhotoUri(session.photoUrl || '');
-  }, [session.name, session.photoUrl]);
+  }, [session.email, session.name, session.photoUrl]);
+
+  useEffect(() => {
+    return escucharBitacoras(
+      setBitacoras,
+      (error: { message?: string }) => setFeedback(error?.message || 'No pudimos cargar el progreso académico.')
+    );
+  }, []);
 
   const pickProfilePhoto = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -84,11 +127,17 @@ export function InstructorProfileTab({
       return;
     }
 
+    if (!email.trim() || !email.includes('@')) {
+      setFeedback('Ingresa un correo válido antes de guardar el perfil.');
+      return;
+    }
+
     setSaving(true);
     setFeedback('');
 
     try {
       const updatedProfile = await actualizarPerfilUsuario({
+        correo: email,
         nombre: name,
         fotoPerfilBase64: photoBase64 || undefined,
         fotoPerfilMimeType: photoBase64 ? photoMimeType : undefined,
@@ -118,16 +167,19 @@ export function InstructorProfileTab({
 
         <View style={styles.formStack}>
           <Field label="Nombre" value={name} onChangeText={setName} />
-          <Field label="Correo" value={session.email} editable={false} />
+          <Field label="Correo" value={email} onChangeText={setEmail} />
           <Field label="Rol" value={session.role} editable={false} />
         </View>
 
         <View style={styles.progressBlock}>
           <View style={styles.progressHeader}>
             <Text style={styles.progressTitle}>Progreso académico revisado</Text>
-            <Text style={styles.progressValue}>{Math.round(instructorProfile.academyProgress * 100)}%</Text>
+            <Text style={styles.progressValue}>{academicProgress}%</Text>
           </View>
-          <ProgressBar accent={instructorPalette.secondary} progress={instructorProfile.academyProgress * 100} soft="#EAF6F3" />
+          <ProgressBar accent={instructorPalette.secondary} progress={academicProgress} soft="#EAF6F3" />
+          <Text style={styles.progressCaption}>
+            {reviewedBitacoras.length}/{visibleBitacoras.length} bitácoras revisadas
+          </Text>
         </View>
 
         <View style={styles.fichasCard}>
@@ -158,46 +210,29 @@ export function InstructorProfileTab({
 
       <SectionHeading
         actionLabel="Preferencias"
-        subtitle="Ajustes funcionales de asistencia, voz y trabajo offline."
-        title="Configuracion"
+        subtitle="Ajustes visibles y funcionales del perfil de instructor."
+        title="Configuración"
       />
 
       <View style={styles.stack}>
         <ToggleRow
-          description="Permite dictar observaciones sin tocar el dispositivo."
-          title="Registro por voz"
+          description="Activa o desactiva la voz dentro del asistente del instructor."
+          title="Voz del asistente"
           value={voiceEnabled}
           onValueChange={onVoiceChange}
         />
         <ToggleRow
-          description="Genera comentarios automáticos para guiar prácticas e informes."
-          title="Retroalimentación automática"
-          value={autoFeedbackEnabled}
-          onValueChange={onAutoFeedbackChange}
+          description="Muestra u oculta el carrusel de novedades en el inicio."
+          title="Novedades en inicio"
+          value={showHomeNews}
+          onValueChange={onShowHomeNewsChange}
         />
         <ToggleRow
-          description="Asistencia distinta para aprendiz e instructor."
-          title="Asistente dual"
-          value={dualAssistantEnabled}
-          onValueChange={onDualAssistantChange}
+          description="Muestra u oculta el bloque de proyectos recientes en el inicio."
+          title="Proyectos recientes"
+          value={showHomeProjects}
+          onValueChange={onShowHomeProjectsChange}
         />
-        <ToggleRow
-          description="Sigue funcionando localmente y sincroniza despues."
-          title="Modo offline"
-          value={offlineEnabled}
-          onValueChange={onOfflineChange}
-        />
-      </View>
-
-      <SectionHeading
-        actionLabel="Resumen"
-        subtitle="Indicadores generales del trabajo reciente."
-        title="Impacto"
-      />
-      <View style={styles.impactRow}>
-        <ImpactCardOne label="Prácticas revisadas" value={String(instructorProfile.reviewedPractices)} />
-        <ImpactCardTwo label="Reportes automáticos" value={String(instructorProfile.automatedReports)} />
-        <ImpactCardThree label="Sesiones guiadas" value={String(instructorProfile.guidedSessions)} />
       </View>
     </>
   );
@@ -269,31 +304,6 @@ function ToggleRow({
         trackColor={{ false: '#D8E6E2', true: '#73C088' }}
         value={value}
       />
-    </View>
-  );
-}
-
-function ImpactCardOne({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.impactCardOne}>
-      <Text style={styles.impactValueOne}>{value}</Text>
-      <Text style={styles.impactLabelOne}>{label}</Text>
-    </View>
-  );
-}
-function ImpactCardTwo({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.impactCardTwo}>
-      <Text style={styles.impactValueTwo}>{value}</Text>
-      <Text style={styles.impactLabelTwo}>{label}</Text>
-    </View>
-  );
-}
-function ImpactCardThree({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.impactCardThree}>
-      <Text style={styles.impactValueThree}>{value}</Text>
-      <Text style={styles.impactLabelThree}>{label}</Text>
     </View>
   );
 }
@@ -392,6 +402,12 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsSemiBold',
     fontSize: 12,
   },
+  progressCaption: {
+    color: instructorPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 16,
+  },
   fichasCard: {
     borderRadius: 20,
     padding: 14,
@@ -489,113 +505,5 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 17,
-  },
-  impactRow: {
-    flexDirection: 'row',
-    gap: 10,
-    flexWrap: 'wrap',
-  },
-impactCardOne: {
-  flexBasis: '31%',
-  flexGrow: 1,
-  minWidth: 100,
-  backgroundColor: instructorPalette.mint,
-  borderRadius: 22,
-  paddingHorizontal: 12,
-  paddingVertical: 16,
-  alignItems: 'center',
-  gap: 4,
-  borderWidth: 0.5,
-  borderColor: instructorPalette.secondary,
-  shadowColor: instructorPalette.primary,
-  shadowOpacity: 0.15,
-  shadowRadius: 6,
-  shadowOffset: {
-    width: 0,
-    height: 2,
-  },
-},
-
-impactCardTwo: {
-  flexBasis: '31%',
-  flexGrow: 1,
-  minWidth: 100,
-  backgroundColor: instructorPalette.softGreen,
-  borderRadius: 22,
-  paddingHorizontal: 12,
-  paddingVertical: 16,
-  alignItems: 'center',
-  gap: 4,
-  borderWidth: 0.5,
-  borderColor: instructorPalette.green,
-  shadowColor: instructorPalette.primary,
-  shadowOpacity: 0.15,
-  shadowRadius: 6,
-  shadowOffset: {
-    width: 0,
-    height: 2,
-  },
-},
-
-impactCardThree: {
-  flexBasis: '31%',
-  flexGrow: 1,
-  minWidth: 100,
-  backgroundColor: instructorPalette.coral,
-  borderRadius: 22,
-  paddingHorizontal: 12,
-  paddingVertical: 16,
-  alignItems: 'center',
-  gap: 4,
-  borderWidth: 0.5,
-  borderColor:  '#EAA189',
-  shadowColor: instructorPalette.primary,
-  shadowOpacity: 0.15,
-  shadowRadius: 6,
-  shadowOffset: {
-    width: 0,
-    height: 2,
-  },
-},
-impactValueOne: {
-  color: instructorPalette.primary,
-  fontFamily: 'PoppinsSemiBold',
-  fontSize: 24,
-},
-
-impactLabelOne: {
-  color: instructorPalette.primary,
-  fontFamily: 'PoppinsRegular',
-  fontSize: 11,
-  textAlign: 'center',
-  lineHeight: 16,
-},
-
-impactValueTwo: {
-  color: instructorPalette.green,
-  fontFamily: 'PoppinsSemiBold',
-  fontSize: 24,
-},
-
-impactLabelTwo: {
-  color: instructorPalette.green,
-  fontFamily: 'PoppinsRegular',
-  fontSize: 11,
-  textAlign: 'center',
-  lineHeight: 16,
-},
-
-impactValueThree: {
-  color:  '#EAA189',
-  fontFamily: 'PoppinsSemiBold',
-  fontSize: 24,
-},
-
-impactLabelThree: {
-  color:  '#EAA189',
-  fontFamily: 'PoppinsRegular',
-  fontSize: 11,
-  textAlign: 'center',
-  lineHeight: 16,
-},
+  }
 });

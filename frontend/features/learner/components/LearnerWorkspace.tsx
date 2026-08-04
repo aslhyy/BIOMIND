@@ -2,14 +2,13 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { learnerAssistantQuestions, learnerProjects } from '../data';
 import { learnerPalette } from '@/features/learner/theme';
-import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { type BottomBarTab, WorkspaceBottomBar } from '@/features/workspace/components/WorkspaceBottomBar';
-import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
+import type { AuthenticatedSession } from '@/features/workspace/types';
+import { LearnerAIBitacoraAssistant } from './LearnerAIBitacoraAssistant';
 import { LearnerHomeTab } from './LearnerHomeTab';
 import { LearnerProfileTab } from './LearnerProfileTab';
 import { LearnerBitacorasTab } from './LearnerBitacorasTab';
@@ -32,50 +31,6 @@ const learnerBottomBarTone = {
   inactiveIcon: learnerPalette.textMuted,
 };
 
-const learnerAssistantTone = {
-  background: learnerPalette.background,
-  border: learnerPalette.border,
-  chatCaption: learnerPalette.textMuted,
-  composerBorder: learnerPalette.border,
-  composerHint: learnerPalette.textMuted,
-  dark: learnerPalette.dark,
-  greenText: learnerPalette.greenText,
-  lavanderText: learnerPalette.lavanderText,
-  mint: learnerPalette.mint,
-  primary: learnerPalette.progress,
-  projectChipBg: learnerPalette.surfaceMuted,
-  projectChipBorder: learnerPalette.border,
-  secondary: learnerPalette.primary,
-  shadow: learnerPalette.shadow,
-  softGreen: learnerPalette.softGreen,
-  surface: learnerPalette.surface,
-  surfaceMuted: learnerPalette.surfaceMuted,
-  switchActive: learnerPalette.primary,
-  text: learnerPalette.text,
-  textMuted: learnerPalette.textMuted,
-};
-
-const learnerAssistantPrompts: WorkspaceAssistantPrompt[] = [
-  {
-    id: 'registro',
-    title: 'Registrar observación',
-    detail: 'Ayúdame a redactar una observación clara, técnica y útil del proyecto seleccionado.',
-    icon: 'notebook-edit-outline',
-  },
-  {
-    id: 'dudas',
-    title: 'Resolver duda',
-    detail: 'Explícame este procedimiento como una guía corta para aprendiz.',
-    icon: 'help-circle-outline',
-  },
-  {
-    id: 'bitacora',
-    title: 'Convertir a bitácora',
-    detail: 'Convierte este dictado en una bitácora ordenada con hallazgos, riesgos y siguiente paso.',
-    icon: 'text-box-check-outline',
-  },
-];
-
 type LearnerWorkspaceProps = {
   session: AuthenticatedSession;
   onSignOut: () => Promise<void> | void;
@@ -87,7 +42,7 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(false);
   const [voiceSuggestionsEnabled, setVoiceSuggestionsEnabled] = useState(false);
-  const [assistantProjectId, setAssistantProjectId] = useState(learnerProjects[0]?.id ?? 'general');
+  const [assistantProjectId, setAssistantProjectId] = useState('general');
   const [assistantAutoVoiceSignal, setAssistantAutoVoiceSignal] = useState(0);
 
   const [fontsLoaded] = useFonts({
@@ -113,43 +68,39 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      <View style={styles.screen}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        style={styles.screen}>
         <ScrollView
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 124 }]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
-          {activeTab === 'inicio' && (
-            <LearnerHomeTab session={session} onOpenAssistant={openAssistantForProject} />
-          )}
-          {activeTab === 'historial' && (
-            <LearnerBitacorasTab session={session} />
-          )}
-          {activeTab === 'asistente' && (
-            <GeminiAssistantModule
-              assistantQuestionsEnabledDefault
-              autoStartVoiceSignal={assistantAutoVoiceSignal}
-              composerPlaceholder="Cuéntale a BIOMIND IA lo que observaste, dicta tus avances o pregunta por tu proyecto..."
-              emptyStateLabel="Apoyo guiado para aprendiz"
-              preferredProjectId={assistantProjectId}
-              projects={learnerProjects.map((project) => ({
-                id: project.id,
-                title: `${project.title} - ${project.species}`,
-              }))}
-              prompts={learnerAssistantPrompts}
-              roleLabel="Aprendiz IA"
+          {activeTab === 'inicio' ? (
+            <LearnerHomeTab
               session={session}
-              subtitle="Cada proyecto conserva su propio historial para que luego tus compañeras conecten el backend sin rehacer la interfaz."
-              systemContext={`Eres Biomind IA para aprendices de biotecnología vegetal. Ayudas a comprender procedimientos, redactar observaciones, responder dudas, convertir voz a bitácora y mejorar registros. Usa este contexto de preguntas sugeridas: ${learnerAssistantQuestions.join(' | ')}`}
-              title="Chat y registro asistido"
-              tone={learnerAssistantTone}
-              voiceEnabled={voiceEnabled}
-              welcomeMessage="Hola. Soy tu asistente de Biomind con Gemini. Puedo escucharte, ayudarte a registrar observaciones, convertirlas en bitácora y resolver dudas del proyecto seleccionado."
+              onOpenAssistant={openAssistantForProject}
+              onOpenNews={(target) => setActiveTab(target)}
             />
-          )}
-          {activeTab === 'proyectos' && (
+          ) : null}
+          {activeTab === 'historial' ? (
+            <LearnerBitacorasTab session={session} />
+          ) : null}
+          {activeTab === 'asistente' ? (
+            <LearnerAIBitacoraAssistant
+              autoSaveEnabled={autoSaveEnabled}
+              autoStartVoiceSignal={assistantAutoVoiceSignal}
+              preferredProjectId={assistantProjectId}
+              session={session}
+              voiceSuggestionsEnabled={voiceSuggestionsEnabled}
+              voiceEnabled={voiceEnabled}
+            />
+          ) : null}
+          {activeTab === 'proyectos' ? (
             <ProjectConversations
-              legacyHeader
               session={session}
               tone={{
                 accent: learnerPalette.primary,
@@ -162,8 +113,8 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
                 text: learnerPalette.text,
               }}
             />
-          )}
-          {activeTab === 'perfil' && (
+          ) : null}
+          {activeTab === 'perfil' ? (
             <LearnerProfileTab
               autoSaveEnabled={autoSaveEnabled}
               session={session}
@@ -174,7 +125,7 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
               onVoiceChange={setVoiceEnabled}
               onVoiceSuggestionsChange={setVoiceSuggestionsEnabled}
             />
-          )}
+          ) : null}
         </ScrollView>
 
         <WorkspaceBottomBar
@@ -187,7 +138,7 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
           onCenterPress={() => setActiveTab('asistente')}
           onTabPress={(tabId) => setActiveTab(tabId as LearnerTab)}
         />
-      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -235,16 +186,16 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    gap: 22,
+    gap: 24,
   },
   headerCard: {
-    paddingTop: 18,
+    paddingTop: 20,
     marginHorizontal: -20,
     paddingHorizontal: 28,
-    paddingBottom: 18,
+    paddingBottom: 22,
     backgroundColor: learnerPalette.background,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
   headerTopRow: {
     flexDirection: 'row',
@@ -254,7 +205,7 @@ const styles = StyleSheet.create({
   },
   headerBadge: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 999,
     backgroundColor: learnerPalette.learner,
   },
@@ -268,9 +219,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 999,
     backgroundColor: learnerPalette.surfaceMuted,
+    borderColor: learnerPalette.border,
+    borderWidth: 1,
     marginBottom: 4,
   },
   rolePillText: {
@@ -290,9 +243,9 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: learnerPalette.dark,
     fontFamily: 'SulphurPointBold',
-    fontSize: 34,
+    fontSize: 32,
     lineHeight: 34,
-    marginTop: 15,
+    marginTop: 16,
   },
   headerSubtitle: {
     color: learnerPalette.text,

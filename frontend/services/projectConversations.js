@@ -23,10 +23,19 @@ function mapSnapshot(snapshot) {
   }));
 }
 
+function getMillis(value) {
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
+
 export function escucharResumenConversaciones(onData, onError) {
   return onSnapshot(
     collection(db, CONVERSATIONS_COLLECTION),
-    (snapshot) => onData(mapSnapshot(snapshot)),
+    (snapshot) => onData(
+      mapSnapshot(snapshot).sort((a, b) => getMillis(b.actualizadoEn) - getMillis(a.actualizadoEn))
+    ),
     onError
   );
 }
@@ -59,12 +68,20 @@ export async function enviarMensajeProyecto({ project, session, text }) {
   }
 
   const conversationRef = doc(db, CONVERSATIONS_COLLECTION, project.id);
+  const selectedProjectId = cleanText(project.proyectoId) || project.id;
+  const selectedProjectTitle = cleanText(project.proyectoTitulo) || cleanText(project.titulo) || 'Proyecto';
   const messagePayload = {
-    proyectoId: project.id,
-    proyectoTitulo: cleanText(project.titulo) || 'Proyecto',
+    conversacionId: project.id,
+    proyectoId: selectedProjectId,
+    proyectoTitulo: selectedProjectTitle,
     fichaId: cleanText(project.fichaId),
     fichaNumero: cleanText(project.fichaNumero),
+    grupoId: cleanText(project.grupoId),
+    participanteUids: Array.isArray(project.participanteUids) ? project.participanteUids.filter(Boolean) : [],
+    destinatarioUid: cleanText(project.targetUid),
     remitenteUid: session.uid,
+    remitenteFichaId: cleanText(session.fichaId),
+    remitenteFichaNumero: cleanText(session.ficha),
     remitenteNombre: session.name,
     remitenteRol: session.role,
     texto: message,
@@ -74,11 +91,15 @@ export async function enviarMensajeProyecto({ project, session, text }) {
   await setDoc(
     conversationRef,
     {
-      proyectoId: project.id,
+      conversacionId: project.id,
+      proyectoId: selectedProjectId,
       proyectoTitulo: messagePayload.proyectoTitulo,
       fichaId: messagePayload.fichaId,
       fichaNumero: messagePayload.fichaNumero,
+      grupoId: messagePayload.grupoId,
+      participanteUids: messagePayload.participanteUids,
       instructorUid: cleanText(project.instructorUid),
+      destinatarioUid: messagePayload.destinatarioUid,
       ultimoMensaje: message,
       ultimoRemitenteUid: session.uid,
       ultimoRemitenteNombre: session.name,

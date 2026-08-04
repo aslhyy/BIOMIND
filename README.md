@@ -49,9 +49,15 @@ Crear un archivo `.env` en la raíz tomando como guía `.env.example`.
 ```env
 EXPO_PUBLIC_GEMINI_API_KEY=tu_api_key
 EXPO_PUBLIC_GEMINI_MODEL=gemini-...
+EXPO_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=tu_anon_key
+EXPO_PUBLIC_PROJECT_FILES_BUCKET=biomind-project-files
+EXPO_PUBLIC_EVIDENCE_FILES_BUCKET=biomind-project-files
 ```
 
 Nota: el chat con Gemini existe en código, pero actualmente no debe contarse como funcional hasta que se revise, se configure bien la API key, se validen permisos y se pruebe el flujo completo.
+
+Para archivos de proyectos se usa Supabase Storage, no Firebase Storage. Crea el bucket indicado en `EXPO_PUBLIC_PROJECT_FILES_BUCKET`, déjalo con lectura pública para que los aprendices puedan abrir archivos, y configura políticas de subida acordes al flujo de la app.
 
 ### 4. Ejecutar la app
 
@@ -229,9 +235,13 @@ La app usa variables públicas de Expo para Gemini:
 ```env
 EXPO_PUBLIC_GEMINI_API_KEY=tu_api_key
 EXPO_PUBLIC_GEMINI_MODEL=gemini-...
+EXPO_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=tu_anon_key
+EXPO_PUBLIC_PROJECT_FILES_BUCKET=biomind-project-files
+EXPO_PUBLIC_EVIDENCE_FILES_BUCKET=biomind-project-files
 ```
 
-Firebase está configurado en `services/firebase.js`.
+Firebase está configurado en `services/firebase.js`. Los archivos de proyectos no usan Firebase Storage; se suben a Supabase Storage y Firestore solo guarda los metadatos y la URL pública.
 
 Cuando se cree el backend Python, debe tener su propio `.env`:
 

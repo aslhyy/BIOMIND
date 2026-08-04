@@ -9,9 +9,16 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.aslhy.biomind",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Permite convertir tu voz en texto para enviar mensajes al chat de Biomind IA.",
+        "NSMicrophoneUsageDescription": "Permite que Biomind use el microfono para conversar con la inteligencia artificial.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.aslhy.biomind",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -19,7 +26,10 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -48,11 +58,24 @@
           "microphonePermission": false
         }
       ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Permite que Biomind use el microfono para conversar con la inteligencia artificial.",
+          "speechRecognitionPermission": "Permite convertir tu voz en texto para enviar mensajes al chat de Biomind IA."
+        }
+      ],
       "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e54098b2-7a35-496d-ab15-a9836a6bca84"
+      }
     }
   }
 }

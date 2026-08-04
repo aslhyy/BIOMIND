@@ -1,16 +1,21 @@
+import { Background } from "@react-navigation/elements";
+
 export const instructorPalette = {
   background: '#f4f4f4',
+  backgroundTwo: '#f7f5f5',
   contentProfile: 'transparent',
   surface: '#FFFFFF',
   surfaceHover: '#f4fbf9b8',
   surfaceMuted: '#F4FBF9',
   text: '#4B5B57',
   textMuted: '#8AA69C',
+  textMutedTwo: '#8aa69c40',
   border: '#D7F2EB',
   shadow: '#CFE5DF',
   primary: '#117C72',
   progress: '#549c67',
   secondary: '#25BFA8',
+  secondaryTwo: '#cdcbcb32',
   learner: '#A7DCA5',
   title: '#117C72',
   mint: '#DDF7F1',

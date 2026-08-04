@@ -1,11 +1,15 @@
 import { ProgressBar, StatusBadge } from '@/features/instructor/components/InstructorUI';
-import { RealAcademicContext, useAssignedSheetLabels } from '@/features/workspace/components/RealAcademicContext';
+import { useAssignedSheetLabels } from '@/features/workspace/components/RealAcademicContext';
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
 import { BitacorasReviewPanel } from '@/features/workspace/components/BitacorasReviewPanel';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { WorkspaceBottomBar, type BottomBarTab } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
+import {
+  buildAcademicAssistantContext,
+  buildWorkspaceAssistantProjects,
+} from '@/features/workspace/utils/academicAssistantContext';
 import { actualizarPerfilUsuario } from '@/services/auth';
 // @ts-ignore
 import { escucharBitacoras } from '@/services/bitacoras';
@@ -17,8 +21,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import type { ComponentProps } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   pasanteAssignedLearners,
@@ -59,6 +64,33 @@ const assistantPrompts: WorkspaceAssistantPrompt[] = [
     title: 'Analizar alerta',
     detail: 'Revisa esta alerta del cultivo y sugiere qué debería validar con el instructor.',
     icon: 'alert-circle-outline',
+  },
+];
+
+const pasanteRealPrompts: WorkspaceAssistantPrompt[] = [
+  {
+    id: 'resumen-ficha-real',
+    title: 'Resumen por ficha',
+    detail: 'Genera un resumen de las fichas que acompano, proyectos activos, bitacoras recientes y alertas para escalar al instructor.',
+    icon: 'school-outline',
+  },
+  {
+    id: 'informe-tareas-real',
+    title: 'Informe tareas',
+    detail: 'Haz un informe de mis tareas asignadas con estado, pendientes, evidencias y acciones recomendadas.',
+    icon: 'clipboard-check-outline',
+  },
+  {
+    id: 'responder-aprendiz-real',
+    title: 'Responder aprendiz',
+    detail: 'Ayudame a responder una pregunta de un aprendiz usando el contexto real del proyecto y una explicacion tecnica clara.',
+    icon: 'message-reply-text-outline',
+  },
+  {
+    id: 'duda-tecnica-real',
+    title: 'Duda tecnica',
+    detail: 'Responde una duda tecnica de laboratorio y dime si debo escalarla al instructor.',
+    icon: 'flask-outline',
   },
 ];
 
@@ -114,11 +146,11 @@ const demoInstructorMessages = [
 ];
 
 const bottomBarTone = {
-  activeIcon: pasantePalette.primary,
-  activePill: pasantePalette.secondary,
+  activeIcon: '#D97862',
+  activePill: '#EFA384',
   centerGradient: ['#FFE8DF', '#F2B39A', '#D97862', '#B76552'] as [string, string, string, string],
-  centerShadow: pasantePalette.secondary,
-  inactiveIcon: pasantePalette.textMuted,
+  centerShadow: '#EFA384',
+  inactiveIcon: '#A59F98',
 };
 
 const assistantTone = {
@@ -169,7 +201,15 @@ type RealLearner = {
   id: string;
   nombre?: string;
   correo?: string;
+  photoUrl?: string | null;
   fichaId?: string | null;
+};
+
+type RealInstructor = {
+  id: string;
+  nombre?: string;
+  correo?: string;
+  photoUrl?: string | null;
 };
 
 type RealGroup = {
@@ -184,6 +224,8 @@ type RealSheet = {
   id: string;
   numero?: string;
   programaNombre?: string;
+  instructorUids?: string[];
+  trimestreActual?: string;
 };
 
 type RealBitacora = {
@@ -197,20 +239,30 @@ type RealBitacora = {
   descripcion?: string;
   estado?: string;
   observacion?: string;
+  creadoEn?: any;
+  actualizadoEn?: any;
 };
 
 type PasanteAssignedTask = {
   id: string;
   titulo?: string;
   descripcion?: string;
-  fichaId?: string;
+  archivos: {
+    nombre: string;
+    mimeType: string;
+    uri: string;
+    url: string;
+  }[];
+  fichaId: string;
   fichaNumero?: string;
-  proyectoId?: string;
-  proyectoTitulo?: string;
+  proyectoId: string;
+  proyectoTitulo: string;
   observacionInstructor?: string;
-  observacionPasante?: string;
-  estado?: 'Pendiente' | 'Hecho' | 'Validada';
-  validadaPorInstructor?: boolean;
+  observacionPasante: string;
+  estado: 'Pendiente' | 'Hecho' | 'Validada';
+  validadaPorInstructor: boolean;
+  creadoEn?: any;
+  actualizadoEn?: any;
 };
 
 export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) {
@@ -219,10 +271,14 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [autoSummaryEnabled, setAutoSummaryEnabled] = useState(true);
   const [evidenceGuideEnabled, setEvidenceGuideEnabled] = useState(true);
-  const [assistantProjectId, setAssistantProjectId] = useState(pasanteProjects[0]?.id ?? 'general');
+  const [assistantProjectId, setAssistantProjectId] = useState(pasanteProjects[0]?.id || 'general');
   const [realProjects, setRealProjects] = useState<RealProject[]>([]);
   const [realSheets, setRealSheets] = useState<RealSheet[]>([]);
   const [realLearners, setRealLearners] = useState<RealLearner[]>([]);
+  const [realInstructors, setRealInstructors] = useState<RealInstructor[]>([]);
+  const [realCompetencias, setRealCompetencias] = useState<Record<string, any>[]>([]);
+  const [realResultados, setRealResultados] = useState<Record<string, any>[]>([]);
+  const [realAsignaciones, setRealAsignaciones] = useState<Record<string, any>[]>([]);
   const [realGroups, setRealGroups] = useState<RealGroup[]>([]);
   const [realBitacoras, setRealBitacoras] = useState<RealBitacora[]>([]);
   const [realTasks, setRealTasks] = useState<PasanteAssignedTask[]>([]);
@@ -247,6 +303,10 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
       (context: any) => {
         setRealSheets(context.fichas || []);
         setRealLearners(context.aprendices || []);
+        setRealInstructors(context.instructores || []);
+        setRealCompetencias(context.competencias || []);
+        setRealResultados(context.resultados || []);
+        setRealAsignaciones(context.asignaciones || []);
       },
       handleError
     );
@@ -326,6 +386,52 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
       soft: pasantePalette.surfaceMuted,
     },
   ];
+  const realAssistantProjects = useMemo(
+    () => buildWorkspaceAssistantProjects(assignedRealProjects, 'Resumen general del pasante'),
+    [assignedRealProjects]
+  );
+  const pasanteSystemContext = useMemo(
+    () => [
+      'Eres BIOMIND IA para pasantes de biotecnologia vegetal.',
+      'Ayudas a responder preguntas tecnicas, preparar respuestas para aprendices, resumir fichas, revisar proyectos, organizar tareas y generar informes con informacion real visible para el pasante.',
+      autoSummaryEnabled
+        ? 'Si el pasante pide una respuesta extensa, entrega primero un resumen tecnico breve y luego acciones concretas.'
+        : 'No generes resumenes automaticos largos; responde de forma puntual y solo resume si el usuario lo pide explicitamente.',
+      evidenceGuideEnabled
+        ? 'Cuando haya fotos, hallazgos o evidencias, ordena la informacion en hallazgo, soporte y siguiente paso.'
+        : 'No fuerces estructura de evidencias; prioriza una respuesta conversacional y directa.',
+      buildAcademicAssistantContext({
+        asignaciones: realAsignaciones,
+        aprendices: realLearners,
+        bitacoras: realBitacorasForProjects,
+        competencias: realCompetencias,
+        fichas: realSheets,
+        grupos: realProjectGroups,
+        instructores: realInstructors,
+        pasantes: [],
+        proyectos: assignedRealProjects,
+        resultados: realResultados,
+        roleLabel: 'pasante',
+        session,
+        tareasPasante: realTasks,
+      }),
+    ].join('\n\n'),
+    [
+      assignedRealProjects,
+      autoSummaryEnabled,
+      evidenceGuideEnabled,
+      realAsignaciones,
+      realBitacorasForProjects,
+      realCompetencias,
+      realInstructors,
+      realLearners,
+      realProjectGroups,
+      realResultados,
+      realSheets,
+      realTasks,
+      session,
+    ]
+  );
 
   const [fontsLoaded] = useFonts({
     PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
@@ -333,6 +439,14 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
     PoppinsSemiBold: require('../../../assets/fonts/Poppins/Poppins-SemiBold.ttf'),
     SulphurPointBold: require('../../../assets/fonts/SulphurPoint-Bold.ttf'),
   });
+  const pasanteAssistantPrompts = useMemo(() => {
+    const prompts = [
+      ...pasanteRealPrompts.filter((prompt) => autoSummaryEnabled || !['resumen-ficha-real', 'informe-tareas-real'].includes(prompt.id)),
+      ...assistantPrompts.filter((prompt) => evidenceGuideEnabled || prompt.id !== 'evidencia'),
+    ];
+
+    return prompts.length ? prompts : pasanteRealPrompts.filter((prompt) => prompt.id === 'responder-aprendiz-real');
+  }, [autoSummaryEnabled, evidenceGuideEnabled]);
 
   if (!fontsLoaded) {
     return null;
@@ -351,7 +465,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
             <MaterialCommunityIcons name="alert-circle-outline" size={48} color={pasantePalette.primary} />
             <Text style={styles.blockTitle}>Acceso restringido</Text>
             <Text style={styles.blockText}>
-              { !hasInstructor
+              {!hasInstructor
                 ? 'Aún no tienes un instructor asignado.'
                 : 'No tienes fichas asignadas. Pide al instructor que te asigne fichas para acceder a la aplicación.'
               }
@@ -374,8 +488,13 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      <View style={styles.screen}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        style={styles.screen}>
         <ScrollView
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 124 }]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
@@ -384,14 +503,18 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
               <PasanteHomeTab
                 metrics={realMetrics}
                 projects={assignedProjects}
+                realBitacoras={realBitacorasForProjects}
+                realInstructors={realInstructors}
+                realLearners={realLearners}
                 realProjects={assignedRealProjects}
+                realSheets={realSheets}
                 session={session}
                 tasks={assignedTasks}
                 realTasks={realTasks}
                 onOpenAssistant={openAssistantForProject}
+                onOpenNews={() => setActiveTab('seguimiento')}
               />
               {realFeedback ? <Text style={styles.feedbackText}>{realFeedback}</Text> : null}
-              <RealAcademicContext session={session} />
             </>
           )}
           {activeTab === 'seguimiento' && (
@@ -415,15 +538,12 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
               chatChannel="pasante"
               emptyStateLabel="Apoyo técnico del pasante"
               preferredProjectId={assistantProjectId}
-              projects={assignedProjects.map((project) => ({
-                id: project.id,
-                title: `${project.title} - ${project.species}`,
-              }))}
-              prompts={assistantPrompts}
+              projects={realAssistantProjects}
+              prompts={pasanteAssistantPrompts}
               roleLabel="Pasante IA"
               session={session}
               subtitle="Organiza evidencias, prepara resúmenes técnicos y valida observaciones antes de enviarlas al instructor."
-              systemContext="Eres Biomind IA para pasantes de biotecnología vegetal. Ayudas a documentar evidencias, resumir avances técnicos, preparar preguntas para instructores y ordenar observaciones de laboratorio."
+              systemContext={pasanteSystemContext}
               title="Asistente técnico de práctica"
               tone={assistantTone}
               voiceEnabled={voiceEnabled}
@@ -469,7 +589,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
           onCenterPress={() => setActiveTab('asistente')}
           onTabPress={(tabId) => setActiveTab(tabId as PasanteTab)}
         />
-      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -520,11 +640,11 @@ function SectionHeading({
   );
 }
 
-function SectionTitle({ title }: { title: string }) {
+function SectionTitle({ title, titleStyle }: { title: string; titleStyle?: any }) {
   return (
     <View style={styles.sectionHeader}>
       <View style={styles.sectionCopy}>
-        <Text style={styles.sectionTitle}>{title}</Text>
+        <Text style={[styles.sectionTitle, titleStyle]}>{title}</Text>
       </View>
     </View>
   );
@@ -533,30 +653,151 @@ function SectionTitle({ title }: { title: string }) {
 function PasanteHomeTab({
   metrics,
   projects,
+  realBitacoras,
+  realInstructors,
+  realLearners,
   realProjects,
+  realSheets,
   realTasks,
   session,
   tasks,
   onOpenAssistant,
+  onOpenNews,
 }: {
   metrics: PasanteMetric[];
   projects: PasanteProject[];
+  realBitacoras: RealBitacora[];
+  realInstructors: RealInstructor[];
+  realLearners: RealLearner[];
   realProjects: RealProject[];
+  realSheets: RealSheet[];
   realTasks: PasanteAssignedTask[];
   session: AuthenticatedSession;
   tasks: PasanteTask[];
   onOpenAssistant: (projectId: string) => void;
+  onOpenNews: () => void;
 }) {
+  const [sheetModalOpen, setSheetModalOpen] = useState(false);
+  const [selectedInstructorId, setSelectedInstructorId] = useState('');
+  const [selectedSheetId, setSelectedSheetId] = useState('');
+  const [learnerSearch, setLearnerSearch] = useState('');
+  const [learnersOpen, setLearnersOpen] = useState(false);
+  const visibleMetrics = metrics.length ? metrics : pasanteMetrics;
+  const projectById = useMemo(
+    () => new Map(realProjects.map((project) => [project.id, project])),
+    [realProjects]
+  );
+  const instructorOptions = useMemo(() => {
+    const options = realInstructors.map((instructor) => ({
+      id: instructor.id,
+      name: instructor.nombre || instructor.correo || 'Instructor',
+      subtitle: instructor.correo || 'Instructor asignado',
+      photoUrl: instructor.photoUrl || null,
+    }));
+
+    if (session.instructorUid && !options.some((item) => item.id === session.instructorUid)) {
+      options.push({
+        id: session.instructorUid,
+        name: 'Instructor asignado',
+        subtitle: 'Asignado a tu acompañamiento',
+        photoUrl: null,
+      });
+    }
+
+    return options;
+  }, [realInstructors, session.instructorUid]);
+  const newsItems = useMemo(() => {
+    const taskNews = realTasks.map((task) => ({
+      id: `task-${task.id}`,
+      accent: task.estado === 'Validada' ? pasantePalette.green : task.estado === 'Hecho' ? pasantePalette.secondary : pasantePalette.primary,
+      detail: task.proyectoTitulo || `Ficha ${task.fichaNumero || task.fichaId || 'general'}`,
+      icon: 'clipboard-text-outline' as const,
+      timestamp: getMillis(task.actualizadoEn) || getMillis(task.creadoEn),
+      title: task.titulo || 'Tarea asignada',
+      type: task.estado === 'Validada' ? 'Tarea validada' : task.estado === 'Hecho' ? 'Tarea enviada' : 'Tarea pendiente',
+    }));
+    const bitacoraNews = realBitacoras.map((bitacora) => {
+      const project = projectById.get(bitacora.proyectoId || '');
+      return {
+        id: `bitacora-${bitacora.id}`,
+        accent: bitacora.estado === 'Aprobada' ? pasantePalette.green : pasantePalette.secondary,
+        detail: `${project?.titulo || bitacora.proyectoTitulo || 'Proyecto'} - ${bitacora.aprendizNombre || 'Aprendiz'}`,
+        icon: bitacora.observacion ? 'comment-check-outline' as const : 'notebook-check-outline' as const,
+        timestamp: getMillis(bitacora.actualizadoEn) || getMillis(bitacora.creadoEn) || getDateMillis(bitacora.fecha || ''),
+        title: bitacora.observacion ? 'Bitácora observada' : 'Bitácora nueva',
+        type: bitacora.estado || 'Por revisar',
+      };
+    });
+
+    return [...taskNews, ...bitacoraNews]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 8);
+  }, [projectById, realBitacoras, realTasks]);
+
+  useEffect(() => {
+    if (!selectedInstructorId || !instructorOptions.some((option) => option.id === selectedInstructorId)) {
+      setSelectedInstructorId(instructorOptions[0]?.id || '');
+      setSelectedSheetId('');
+      setLearnersOpen(false);
+      setLearnerSearch('');
+    }
+  }, [instructorOptions, selectedInstructorId]);
+
   return (
     <>
-      <View style={styles.startCard}>
-        <SectionTitle title="Resumen de práctica" />
+      <View style={styles.summarySection}>
+        <SectionTitle title="Resumen de práctica" titleStyle={styles.summarySectionTitle} />
         <View style={styles.metricsRow}>
-          {(metrics.length ? metrics : pasanteMetrics).map((metric) => (
-            <MetricCard key={metric.id} metric={metric} />
+          {visibleMetrics.map((metric) => (
+            <MetricCard
+              key={metric.id}
+              metric={metric}
+              onPress={metric.id === 'fichas-reales' ? () => setSheetModalOpen(true) : undefined}
+            />
           ))}
         </View>
       </View>
+
+      <PasanteSheetsModal
+        instructorOptions={instructorOptions}
+        learners={realLearners}
+        learnersOpen={learnersOpen}
+        learnerSearch={learnerSearch}
+        projects={realProjects}
+        selectedInstructorId={selectedInstructorId}
+        selectedSheetId={selectedSheetId}
+        sheets={realSheets}
+        visible={sheetModalOpen}
+        onClose={() => setSheetModalOpen(false)}
+        onInstructorChange={(instructorId) => {
+          setSelectedInstructorId(instructorId);
+          setSelectedSheetId('');
+          setLearnersOpen(false);
+          setLearnerSearch('');
+        }}
+        onLearnerSearch={setLearnerSearch}
+        onSelectSheet={(sheetId) => {
+          setSelectedSheetId(sheetId);
+          setLearnersOpen(false);
+          setLearnerSearch('');
+        }}
+        onToggleLearners={() => setLearnersOpen((current) => !current)}
+      />
+
+      <SectionHeading
+        actionLabel={`${newsItems.length} recientes`}
+        subtitle="Actualizaciones de tareas, bitácoras y observaciones asignadas."
+        title="Novedades"
+      />
+      {newsItems.length ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.newsCarouselContent}>
+          {newsItems.map((item) => (
+            <PasanteNewsCard key={item.id} item={item} onPress={onOpenNews} />
+          ))}
+        </ScrollView>
+      ) : (
+        <EmptyAssignedState />
+      )}
 
       <SectionHeading
         actionLabel="Hoy"
@@ -577,19 +818,240 @@ function PasanteHomeTab({
         )}
       </View>
 
-      <SectionHeading
-        actionLabel="Cultivos"
-        subtitle="Proyectos donde estás apoyando registro, evidencia y trazabilidad."
-        title="Proyectos asignados"
-      />
-      <View style={styles.stack}>
-        {realProjects.length ? realProjects.slice(0, 3).map((project) => (
-          <RealProjectCard key={project.id} project={project} />
-        )) : projects.slice(0, 2).map((project) => (
-          <ProjectCard key={project.id} project={project} onOpenAssistant={onOpenAssistant} />
-        ))}
-      </View>
     </>
+  );
+}
+
+function PasanteSheetsModal({
+  instructorOptions,
+  learners,
+  learnersOpen,
+  learnerSearch,
+  projects,
+  selectedInstructorId,
+  selectedSheetId,
+  sheets,
+  visible,
+  onClose,
+  onInstructorChange,
+  onLearnerSearch,
+  onSelectSheet,
+  onToggleLearners,
+}: {
+  instructorOptions: { id: string; name: string; subtitle: string; photoUrl: string | null }[];
+  learners: RealLearner[];
+  learnersOpen: boolean;
+  learnerSearch: string;
+  projects: RealProject[];
+  selectedInstructorId: string;
+  selectedSheetId: string;
+  sheets: RealSheet[];
+  visible: boolean;
+  onClose: () => void;
+  onInstructorChange: (instructorId: string) => void;
+  onLearnerSearch: (value: string) => void;
+  onSelectSheet: (sheetId: string) => void;
+  onToggleLearners: () => void;
+}) {
+  const selectedInstructor = instructorOptions.find((item) => item.id === selectedInstructorId);
+  const sheetsForInstructor = sheets.filter((sheet) => {
+    const sheetInstructorUids = Array.isArray(sheet.instructorUids) ? sheet.instructorUids : [];
+    const hasProjectWithInstructor = projects.some((project) =>
+      project.instructorUid === selectedInstructorId
+      && (project.fichaId === sheet.id || project.fichaNumero === sheet.numero)
+    );
+
+    return !selectedInstructorId || sheetInstructorUids.includes(selectedInstructorId) || hasProjectWithInstructor;
+  });
+  const visibleSheets = sheetsForInstructor.length || !selectedInstructorId ? sheetsForInstructor : sheets;
+  const selectedSheet = visibleSheets.find((sheet) => sheet.id === selectedSheetId);
+  const sheetProjects = selectedSheet
+    ? projects.filter((project) =>
+      (project.fichaId === selectedSheet.id || project.fichaNumero === selectedSheet.numero)
+      && (!selectedInstructorId || project.instructorUid === selectedInstructorId || !project.instructorUid)
+    )
+    : [];
+  const sheetLearners = selectedSheet
+    ? learners.filter((learner) => learner.fichaId === selectedSheet.id)
+    : [];
+  const filteredLearners = sheetLearners.filter((learner) =>
+    `${learner.nombre || ''} ${learner.correo || ''}`.toLowerCase().includes(learnerSearch.trim().toLowerCase())
+  );
+
+  return (
+    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.pasanteSheetModal}>
+          <View style={styles.modalHeader}>
+            <View style={styles.cardCopy}>
+              <Text style={styles.modalEyebrow}>Fichas asignadas</Text>
+              <Text style={styles.modalTitle}>
+                {selectedSheet ? `Ficha ${selectedSheet.numero || selectedSheet.id}` : 'Vista por instructor'}
+              </Text>
+              <Text style={styles.modalSubtitle}>
+                {selectedInstructor ? selectedInstructor.name : 'Selecciona el instructor para ver sus fichas.'}
+              </Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.modalClose}>
+              <MaterialCommunityIcons name="close" size={20} color={pasantePalette.primary} />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalContent}>
+            <Text style={styles.modalSectionTitle}>Instructor</Text>
+            <View style={styles.selectorList}>
+              {instructorOptions.length ? instructorOptions.map((instructor) => {
+                const active = instructor.id === selectedInstructorId;
+                return (
+                  <Pressable
+                    key={instructor.id}
+                    onPress={() => onInstructorChange(instructor.id)}
+                    style={[styles.selectorCard, active && styles.selectorCardActive]}>
+                    <UserAvatar name={instructor.name} photoUrl={instructor.photoUrl} size={38} />
+                    <View style={styles.cardCopy}>
+                      <Text style={[styles.selectorTitle, active && styles.selectorTitleActive]}>{instructor.name}</Text>
+                      <Text style={styles.selectorSubtitle}>{instructor.subtitle}</Text>
+                    </View>
+                    {active ? <MaterialCommunityIcons name="check-circle" size={18} color={pasantePalette.primary} /> : null}
+                  </Pressable>
+                );
+              }) : (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyText}>No encontramos instructores asociados.</Text>
+                </View>
+              )}
+            </View>
+
+            <Text style={styles.modalSectionTitle}>Ficha</Text>
+            <View style={styles.selectorList}>
+              {visibleSheets.length ? visibleSheets.map((sheet) => {
+                const active = sheet.id === selectedSheetId;
+                const sheetProjectCount = projects.filter((project) =>
+                  project.fichaId === sheet.id || project.fichaNumero === sheet.numero
+                ).length;
+                return (
+                  <Pressable
+                    key={sheet.id}
+                    onPress={() => onSelectSheet(sheet.id)}
+                    style={[styles.selectorCard, active && styles.selectorCardActive]}>
+                    <View style={styles.sheetSelectorIcon}>
+                      <MaterialCommunityIcons name="school-outline" size={19} color={pasantePalette.primary} />
+                    </View>
+                    <View style={styles.cardCopy}>
+                      <Text style={[styles.selectorTitle, active && styles.selectorTitleActive]}>
+                        Ficha {sheet.numero || sheet.id}
+                      </Text>
+                      <Text style={styles.selectorSubtitle}>
+                        {sheet.programaNombre || 'Programa pendiente'} - {sheetProjectCount} proyecto(s)
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              }) : (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyText}>Este instructor no tiene fichas visibles para tu usuario.</Text>
+                </View>
+              )}
+            </View>
+
+            {selectedSheet ? (
+              <>
+                <View style={styles.modalStatsRow}>
+                  <ModalInfoStat icon="account-multiple-outline" label="Aprendices" value={String(sheetLearners.length)} />
+                  <ModalInfoStat icon="briefcase-outline" label="Proyectos" value={String(sheetProjects.length)} />
+                  <ModalInfoStat icon="calendar-outline" label="Trimestre" value={selectedSheet.trimestreActual || 'S/T'} />
+                </View>
+
+                <Text style={styles.modalSectionTitle}>Información de la ficha</Text>
+                <View style={styles.modalInfoCard}>
+                  <Text style={styles.cardTitle}>{selectedSheet.programaNombre || 'Programa pendiente'}</Text>
+                  <Text style={styles.cardText}>
+                    Instructor: {selectedInstructor?.name || 'Instructor asignado'}
+                  </Text>
+                  <Text style={styles.cardText}>
+                    Proyectos activos: {sheetProjects.length || 0}
+                  </Text>
+                </View>
+
+                <Pressable onPress={onToggleLearners} style={styles.learnersToggle}>
+                  <Text style={styles.learnersToggleText}>{learnersOpen ? 'Ocultar aprendices' : 'Ver aprendices'}</Text>
+                  <MaterialCommunityIcons name={learnersOpen ? 'chevron-up' : 'chevron-down'} size={20} color="#FFFFFF" />
+                </Pressable>
+
+                {learnersOpen ? (
+                  <View style={styles.learnersPanel}>
+                    <View style={styles.searchBox}>
+                      <MaterialCommunityIcons name="magnify" size={18} color={pasantePalette.textMuted} />
+                      <TextInput
+                        placeholder="Buscar aprendiz..."
+                        placeholderTextColor={pasantePalette.textMuted}
+                        value={learnerSearch}
+                        onChangeText={onLearnerSearch}
+                        style={styles.searchInput}
+                      />
+                    </View>
+                    {filteredLearners.length ? filteredLearners.map((learner) => (
+                      <View key={learner.id} style={styles.learnerRow}>
+                        <UserAvatar name={learner.nombre || learner.correo || 'Aprendiz'} photoUrl={learner.photoUrl || null} size={38} />
+                        <View style={styles.cardCopy}>
+                          <Text style={styles.cardTitle}>{learner.nombre || 'Aprendiz'}</Text>
+                          <Text style={styles.cardMeta}>{learner.correo || 'Sin correo'}</Text>
+                        </View>
+                      </View>
+                    )) : <Text style={styles.emptyText}>No hay aprendices con esa búsqueda.</Text>}
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ModalInfoStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.modalStat}>
+      <MaterialCommunityIcons name={icon} size={18} color={pasantePalette.primary} />
+      <Text style={styles.modalStatValue}>{value}</Text>
+      <Text style={styles.modalStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function PasanteNewsCard({
+  item,
+  onPress,
+}: {
+  item: {
+    accent: string;
+    detail: string;
+    icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
+    title: string;
+    type: string;
+  };
+  onPress: () => void;
+}) {
+  return (
+    <Pressable onPress={onPress} style={styles.newsCard}>
+      <View style={[styles.newsIcon, { backgroundColor: `${item.accent}22` }]}>
+        <MaterialCommunityIcons name={item.icon} size={20} color={item.accent} />
+      </View>
+      <View style={styles.newsCopy}>
+        <Text numberOfLines={1} style={styles.newsType}>{item.type}</Text>
+        <Text numberOfLines={2} style={styles.newsTitle}>{item.title}</Text>
+        <Text numberOfLines={3} style={styles.newsText}>{item.detail}</Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -709,7 +1171,6 @@ function PasanteTechnicalTracking({
   learners,
   projects,
   session,
-  tasks,
 }: {
   bitacoras: RealBitacora[];
   groups: RealGroup[];
@@ -721,8 +1182,7 @@ function PasanteTechnicalTracking({
   const [selectedSheet, setSelectedSheet] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [selectedLearnerId, setSelectedLearnerId] = useState('');
-  const [taskObservation, setTaskObservation] = useState('');
-  const [feedback, setFeedback] = useState('');
+  const [feedback] = useState('');
 
   const sheets = Array.from(new Map(projects.map((project) => [
     project.fichaId || project.fichaNumero || '',
@@ -747,36 +1207,16 @@ function PasanteTechnicalTracking({
   (selectedProject?.aprendizIds || []).forEach((id) => learnerIds.add(id));
   (selectedGroup?.aprendizIds || []).forEach((id) => learnerIds.add(id));
   const projectLearners = learners.filter((learner) => learnerIds.has(learner.id));
-  const filteredLearners = projectLearners;
   const projectBitacoras = bitacoras
     .filter((bitacora) => bitacora.proyectoId === selectedProject?.id)
     .filter((bitacora) => !selectedLearnerId || bitacora.aprendizUid === selectedLearnerId);
   const reviewed = bitacoras.filter((bitacora) => bitacora.proyectoId === selectedProject?.id && bitacora.observacion).length;
   const approved = bitacoras.filter((bitacora) => bitacora.proyectoId === selectedProject?.id && bitacora.estado === 'Aprobada').length;
   const total = bitacoras.filter((bitacora) => bitacora.proyectoId === selectedProject?.id).length;
-
-  const confirmDone = (task: PasanteAssignedTask) => {
-    Alert.alert(
-      'Marcar tarea como hecha',
-      `¿Confirmas que terminaste "${task.titulo || 'esta tarea'}"?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Aceptar',
-          onPress: async () => {
-            try {
-              await marcarTareaPasanteHecha(task.id, taskObservation);
-              setTaskObservation('');
-              setFeedback('Tarea marcada como hecha. El instructor debe validarla.');
-            } catch (error) {
-              const typedError = error as { message?: string };
-              setFeedback(typedError.message || 'No pudimos actualizar la tarea.');
-            }
-          },
-        },
-      ]
-    );
-  };
+  const selectedSheetLabel = sheets.find((sheet) => sheet.id === selectedSheet)?.label || 'Ficha sin seleccionar';
+  const projectProgress = Number(selectedProject?.progreso || 0);
+  const reviewProgress = total ? Math.round((reviewed / total) * 100) : 0;
+  const approvalProgress = total ? Math.round((approved / total) * 100) : 0;
 
   return (
     <>
@@ -786,86 +1226,81 @@ function PasanteTechnicalTracking({
         title="Acompañamiento real por ficha."
       />
 
-      <View style={styles.startCard}>
-        <SectionTitle title="Filtros de seguimiento" />
-        <PasanteSearchableSelector
-          label="Ficha"
-          options={sheets.map((sheet, index) => ({ label: `${index + 1}. ${sheet.label}`, value: sheet.id }))}
-          value={selectedSheet}
-          onChange={(sheetId) => {
-            setSelectedSheet(sheetId);
-            setSelectedProjectId('');
-            setSelectedLearnerId('');
-          }}
-        />
-        <PasanteSearchableSelector
-          label="Proyecto"
-          options={sheetProjects.map((project, index) => ({
-            label: `${index + 1}. ${project.titulo || 'Proyecto'}`,
-            subtitle: project.competenciaNombre || 'Sin competencia',
-            value: project.id,
-          }))}
-          value={selectedProject?.id || ''}
-          onChange={(projectId) => {
-            setSelectedProjectId(projectId);
-            setSelectedLearnerId('');
-          }}
-        />
-      </View>
-
-      {false && tasks.length ? (
-        <>
-          <SectionHeading actionLabel={`${tasks.length}`} subtitle="Tareas asignadas por el instructor." title="Mis tareas" />
-          <View style={styles.stack}>
-            {tasks.map((task) => (
-              <View key={task.id} style={styles.taskCard}>
-                <AssignedPasanteTaskCard task={task} />
-                {task.estado !== 'Hecho' && task.estado !== 'Validada' ? (
-                  <>
-                    <Field label="Observación del pasante" value={taskObservation} onChangeText={setTaskObservation} />
-                    <Pressable onPress={() => confirmDone(task)} style={styles.secondaryButton}>
-                      <Text style={styles.secondaryButtonText}>Marcar como hecho</Text>
-                    </Pressable>
-                  </>
-                ) : null}
-              </View>
-            ))}
+      <View style={styles.trackingPanel}>
+        <View style={styles.trackingPanelHeader}>
+          <View style={styles.cardCopy}>
+            <Text style={styles.trackingEyebrow}>{selectedSheetLabel}</Text>
+            <Text style={styles.trackingTitle}>{selectedProject?.titulo || 'Proyecto sin seleccionar'}</Text>
+            <Text style={styles.trackingText}>
+              {selectedProject?.competenciaNombre || 'Sin competencia'} - {selectedProject?.rapDescripcion || 'RAP pendiente'}
+            </Text>
           </View>
-        </>
-      ) : null}
+          <StatusBadge
+            accent={selectedProject?.estado === 'Aprobado' ? pasantePalette.green : pasantePalette.primary}
+            label={selectedProject?.estado || 'Pendiente'}
+            soft={selectedProject?.estado === 'Aprobado' ? pasantePalette.softGreen : pasantePalette.aquaSoft}
+          />
+        </View>
 
-      <View style={styles.startCard}>
-        <SectionTitle title="Avance del proyecto" />
-        <View style={styles.metricsRow}>
-          <MetricCard metric={{ id: 'rev', label: 'Observadas', value: `${reviewed}/${total}`, caption: 'Bitácoras con retroalimentación', icon: 'eye-check-outline', accent: pasantePalette.primary, soft: pasantePalette.aquaSoft }} />
-          <MetricCard metric={{ id: 'apr', label: 'Aprobadas', value: `${approved}`, caption: 'Validadas por instructor', icon: 'check-decagram-outline', accent: pasantePalette.green, soft: pasantePalette.softGreen }} />
+        <View style={styles.trackingProgressBlock}>
+          <View style={styles.trackingProgressHeader}>
+            <Text style={styles.trackingProgressLabel}>Avance del proyecto</Text>
+            <Text style={styles.trackingProgressValue}>{projectProgress}%</Text>
+          </View>
+          <ProgressBar accent={pasantePalette.green} progress={projectProgress} soft={pasantePalette.softGreen} />
+        </View>
+
+        <View style={styles.trackingFiltersGrid}>
+          <PasanteSearchableSelector
+            label="Ficha"
+            options={sheets.map((sheet, index) => ({ label: `${index + 1}. ${sheet.label}`, value: sheet.id }))}
+            value={selectedSheet}
+            onChange={(sheetId) => {
+              setSelectedSheet(sheetId);
+              setSelectedProjectId('');
+              setSelectedLearnerId('');
+            }}
+          />
+          <PasanteSearchableSelector
+            label="Proyecto"
+            options={sheetProjects.map((project, index) => ({
+              label: `${index + 1}. ${project.titulo || 'Proyecto'}`,
+              subtitle: project.competenciaNombre || 'Sin competencia',
+              value: project.id,
+            }))}
+            value={selectedProject?.id || ''}
+            onChange={(projectId) => {
+              setSelectedProjectId(projectId);
+              setSelectedLearnerId('');
+            }}
+          />
+          <PasanteSearchableSelector
+            label="Aprendiz"
+            options={[
+              { label: 'Todos', subtitle: 'Ver bitacoras de todo el proyecto', value: '' },
+              ...projectLearners.map((learner, index) => ({
+                label: `${index + 1}. ${learner.nombre || learner.correo || 'Aprendiz'}`,
+                subtitle: learner.correo || '',
+                value: learner.id,
+              })),
+            ]}
+            value={selectedLearnerId}
+            onChange={setSelectedLearnerId}
+          />
+        </View>
+
+        <View style={styles.trackingMetricsRow}>
+          <MetricCard compact metric={{ id: 'rev', label: 'Observadas', value: `${reviewed}/${total}`, caption: `${reviewProgress}% con feedback`, icon: 'eye-check-outline', accent: pasantePalette.primary, soft: pasantePalette.aquaSoft }} />
+          <MetricCard compact metric={{ id: 'apr', label: 'Aprobadas', value: `${approved}`, caption: `${approvalProgress}% validadas`, icon: 'check-decagram-outline', accent: pasantePalette.green, soft: pasantePalette.softGreen }} />
         </View>
       </View>
 
-      <SectionHeading actionLabel={`${projectLearners.length}`} subtitle="Busca un aprendiz específico o mira todos." title="Aprendices del proyecto" />
-      <View style={styles.startCard}>
-        <PasanteSearchableSelector
-          label="Aprendiz"
-          options={[
-            { label: 'Todos', subtitle: 'Ver bitácoras de todo el proyecto', value: '' },
-            ...filteredLearners.map((learner, index) => ({
-              label: `${index + 1}. ${learner.nombre || learner.correo || 'Aprendiz'}`,
-              subtitle: learner.correo || '',
-              value: learner.id,
-            })),
-          ]}
-          value={selectedLearnerId}
-          onChange={setSelectedLearnerId}
-        />
-      </View>
-
-      <SectionHeading actionLabel={`${projectBitacoras.length}`} subtitle="El pasante solo puede registrar observaciones." title="Bitácoras" />
+      <SectionHeading actionLabel={`${projectBitacoras.length} registros`} subtitle="El pasante solo puede registrar observaciones." title="Bitácoras" />
       <BitacorasReviewPanel bitacoras={projectBitacoras as any} mode="observation" session={session} />
       {feedback ? <Text style={styles.feedbackText}>{feedback}</Text> : null}
     </>
   );
 }
-
 function PasanteProjectsTab({
   projects,
   onOpenAssistant,
@@ -919,6 +1354,7 @@ function PasanteProfileTab({
   onVoiceChange: (value: boolean) => void;
 }) {
   const [name, setName] = useState(session.name);
+  const [email, setEmail] = useState(session.email);
   const [photoUri, setPhotoUri] = useState(session.photoUrl || '');
   const [photoBase64, setPhotoBase64] = useState('');
   const [photoMimeType, setPhotoMimeType] = useState('image/jpeg');
@@ -931,8 +1367,9 @@ function PasanteProfileTab({
 
   useEffect(() => {
     setName(session.name);
+    setEmail(session.email);
     setPhotoUri(session.photoUrl || '');
-  }, [session.name, session.photoUrl]);
+  }, [session.email, session.name, session.photoUrl]);
 
   const pickProfilePhoto = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -972,12 +1409,17 @@ function PasanteProfileTab({
       setFeedback('Falta el nombre. Ingresa tu nombre antes de guardar el perfil.');
       return;
     }
+    if (!email.trim()) {
+      setFeedback('Ingresa un correo válido antes de guardar.');
+      return;
+    }
 
     setSaving(true);
     setFeedback('');
 
     try {
       const updatedProfile = await actualizarPerfilUsuario({
+        correo: email,
         nombre: name,
         fotoPerfilBase64: photoBase64 || undefined,
         fotoPerfilMimeType: photoBase64 ? photoMimeType : undefined,
@@ -1008,9 +1450,17 @@ function PasanteProfileTab({
 
         <View style={styles.formStack}>
           <Field label="Nombre" value={name} onChangeText={setName} />
-          <Field label="Correo" value={session.email} editable={false} />
+          <Field label="Correo" value={email} onChangeText={setEmail} />
           <Field label="Rol" value={session.role} editable={false} />
-          <Field label="Fichas asignadas" value={assignedSheetsText} editable={false} />
+        </View>
+
+        <View style={styles.pasanteFichasCard}>
+          <Text style={styles.pasanteFichasTitle}>Fichas asignadas</Text>
+          {assignedSheetLabels.length ? assignedSheetLabels.map((label) => (
+            <Text key={label} style={styles.pasanteFichaItem}>
+              {label}
+            </Text>
+          )) : <Text style={styles.pasanteFichaItem}>Aún no tienes fichas asignadas.</Text>}
         </View>
 
         <View style={styles.profileActions}>
@@ -1069,6 +1519,14 @@ function AssignedPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
 
   return (
     <View style={styles.taskCard}>
+      <AssignedPasanteTaskContent task={task} accent={accent} />
+    </View>
+  );
+}
+
+function AssignedPasanteTaskContent({ accent, task }: { accent: string; task: PasanteAssignedTask }) {
+  return (
+    <>
       <View style={styles.cardHeader}>
         <View style={[styles.taskIcon, { backgroundColor: `${accent}22` }]}>
           <MaterialCommunityIcons name="clipboard-check-outline" size={18} color={accent} />
@@ -1080,8 +1538,34 @@ function AssignedPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
         <StatusBadge accent={accent} label={task.estado || 'Pendiente'} soft={`${accent}1F`} />
       </View>
       {task.descripcion ? <Text style={styles.cardText}>{task.descripcion}</Text> : null}
+      <PasanteTaskAttachments archivos={task.archivos || []} />
       {task.observacionInstructor ? <Text style={styles.qaLabel}>Instructor: {task.observacionInstructor}</Text> : null}
       {task.observacionPasante ? <Text style={styles.qaLabel}>Pasante: {task.observacionPasante}</Text> : null}
+    </>
+  );
+}
+
+function PasanteTaskAttachments({ archivos }: { archivos: NonNullable<PasanteAssignedTask['archivos']> }) {
+  if (!archivos.length) {
+    return null;
+  }
+
+  return (
+    <View style={styles.taskAttachmentList}>
+      {archivos.map((file, index) => {
+        const fileUrl = file.url || file.uri || '';
+        return (
+          <Pressable
+            key={`${fileUrl || file.nombre}-${index}`}
+            disabled={!fileUrl}
+            onPress={() => fileUrl && Linking.openURL(fileUrl)}
+            style={styles.taskAttachmentItem}>
+            <MaterialCommunityIcons name={file.mimeType.startsWith('image/') ? 'image-outline' : 'file-document-outline'} size={17} color={pasantePalette.primary} />
+            <Text numberOfLines={1} style={styles.taskAttachmentText}>{file.nombre || 'Adjunto'}</Text>
+            <MaterialCommunityIcons name="open-in-new" size={15} color={pasantePalette.primary} />
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -1097,7 +1581,7 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
   const confirmDone = () => {
     Alert.alert(
       'Marcar tarea como hecha',
-      `¿Confirmas que terminaste "${task.titulo || 'esta tarea'}"?`,
+      `¿Confirmas que terminaste "${task.titulo || 'esta tarea'}"`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1107,7 +1591,7 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
               await marcarTareaPasanteHecha(task.id, observation);
               setFeedback('Tarea marcada como hecha. El instructor debe validarla.');
             } catch (error) {
-              const typedError = error as { message?: string };
+              const typedError = error as { message: string };
               setFeedback(typedError.message || 'No pudimos actualizar la tarea.');
             }
           },
@@ -1119,7 +1603,7 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
   const confirmPending = () => {
     Alert.alert(
       'Volver a pendiente',
-      `¿Quieres volver a dejar "${task.titulo || 'esta tarea'}" como pendiente para corregirla?`,
+      `¿Quieres volver a dejar "${task.titulo || 'esta tarea'}" como pendiente para corregirla`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1129,7 +1613,7 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
               await marcarTareaPasantePendiente(task.id, observation);
               setFeedback('Tarea marcada nuevamente como pendiente.');
             } catch (error) {
-              const typedError = error as { message?: string };
+              const typedError = error as { message: string };
               setFeedback(typedError.message || 'No pudimos actualizar la tarea.');
             }
           },
@@ -1140,7 +1624,10 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
 
   return (
     <View style={styles.taskCard}>
-      <AssignedPasanteTaskCard task={task} />
+      <AssignedPasanteTaskContent
+        accent={task.estado === 'Validada' ? pasantePalette.green : task.estado === 'Hecho' ? pasantePalette.secondary : pasantePalette.primary}
+        task={task}
+      />
       {task.estado !== 'Validada' ? (
         <>
           <Field label="Observación del pasante" value={observation} onChangeText={setObservation} />
@@ -1165,15 +1652,37 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
   );
 }
 
-function MetricCard({ metric }: { metric: PasanteMetric }) {
-  return (
-    <View style={[styles.metricCard, { backgroundColor: metric.soft }]}>
+function MetricCard({
+  compact = false,
+  metric,
+  onPress,
+}: {
+  compact?: boolean;
+  metric: PasanteMetric;
+  onPress?: () => void;
+}) {
+  const content = (
+    <>
       <View style={[styles.metricIcon, { backgroundColor: metric.accent }]}>
         <MaterialCommunityIcons name={metric.icon} size={18} color={pasantePalette.surface} />
       </View>
       <Text style={[styles.metricValue, { color: metric.accent }]}>{metric.value}</Text>
       <Text style={styles.metricLabel}>{metric.label}</Text>
       <Text style={styles.metricCaption}>{metric.caption}</Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable onPress={onPress} style={[styles.metricCard, compact && styles.metricCardCompact, { backgroundColor: metric.soft }]}>
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.metricCard, compact && styles.metricCardCompact, { backgroundColor: metric.soft }]}>
+      {content}
     </View>
   );
 }
@@ -1484,6 +1993,19 @@ function ToggleRow({
   );
 }
 
+function getMillis(value: any) {
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
+
+function getDateMillis(value: string) {
+  if (!value) return 0;
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
 function getFirstName(name: string) {
   return name.split(' ').filter(Boolean)[0] || 'Pasante';
 }
@@ -1500,16 +2022,16 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    gap: 22,
+    gap: 24,
   },
   headerCard: {
-    paddingTop: 18,
+    paddingTop: 20,
     marginHorizontal: -20,
     paddingHorizontal: 28,
-    paddingBottom: 18,
+    paddingBottom: 22,
     backgroundColor: pasantePalette.background,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
   headerTopRow: {
     flexDirection: 'row',
@@ -1519,7 +2041,7 @@ const styles = StyleSheet.create({
   },
   headerBadge: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 999,
     backgroundColor: pasantePalette.primary,
   },
@@ -1533,9 +2055,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 999,
     backgroundColor: pasantePalette.surfaceMuted,
+    borderColor: pasantePalette.border,
+    borderWidth: 1,
   },
   rolePillText: {
     color: pasantePalette.primary,
@@ -1554,9 +2078,9 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: pasantePalette.dark,
     fontFamily: 'SulphurPointBold',
-    fontSize: 34,
+    fontSize: 32,
     lineHeight: 34,
-    marginTop: 15,
+    marginTop: 16,
   },
   headerSubtitle: {
     color: pasantePalette.text,
@@ -1565,46 +2089,56 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   startCard: {
-    backgroundColor: pasantePalette.surface,
-    borderColor: pasantePalette.border,
-    borderRadius: 30,
-    borderWidth: 1,
-    elevation: 3,
-    paddingVertical: 20,
-    paddingHorizontal: 22,
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    borderWidth: 0,
+    elevation: 0,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
     gap: 16,
-    shadowColor: pasantePalette.shadow,
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
+    shadowOpacity: 0,
   },
-  dropdownBlock: { gap: 9 },
+  summarySection: {
+    backgroundColor: pasantePalette.surface,
+    gap: 16,
+    marginHorizontal: -30,
+    paddingHorizontal: 32,
+    paddingVertical: 20,
+  },
+  summarySectionTitle: {
+    fontFamily: 'SulphurPointBold',
+    fontSize: 25,
+  },
+  dropdownBlock: { gap: 7 },
   dropdownLabel: {
-    color: pasantePalette.primary,
-    fontFamily: 'PoppinsSemiBold',
-    fontSize: 13,
+    color: pasantePalette.secondary,
+    fontFamily: 'PoppinsLight',
+    fontWeight: 700,
+    fontSize: 14,
+    marginBottom: 5, 
   },
   dropdownTrigger: {
     alignItems: 'center',
-    backgroundColor: '#FAFCFB',
+    backgroundColor: pasantePalette.muted,
     borderColor: pasantePalette.border,
-    borderRadius: 20,
+    borderRadius: 14,
     borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 58,
-    paddingHorizontal: 14,
+    minHeight: 42,
+    paddingHorizontal: 12,
   },
   dropdownTriggerText: {
     color: pasantePalette.text,
     flex: 1,
-    fontFamily: 'PoppinsSemiBold',
+    fontFamily: 'PoppinsLight',
+    fontWeight: 600,
     fontSize: 13,
   },
   dropdownPanel: {
     backgroundColor: pasantePalette.surface,
     borderColor: pasantePalette.border,
-    borderRadius: 24,
+    borderRadius: 18,
     borderWidth: 1,
     gap: 10,
     padding: 12,
@@ -1615,30 +2149,31 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     flexDirection: 'row',
     gap: 8,
-    paddingHorizontal: 12,
+    minHeight: 38,
+    paddingHorizontal: 11,
   },
   dropdownSearchInput: {
     color: pasantePalette.text,
     flex: 1,
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
-    minHeight: 42,
+    minHeight: 38,
   },
   dropdownOption: {
     alignItems: 'center',
-    backgroundColor: '#FAFCFB',
+    backgroundColor: pasantePalette.aquaSoft,
     borderColor: pasantePalette.border,
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 9,
-    minHeight: 50,
+    minHeight: 42,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 6,
   },
   dropdownOptionActive: {
+    backgroundColor: pasantePalette.surfaceMuted,
     borderColor: pasantePalette.primary,
-    borderWidth: 2,
   },
   dropdownOptionText: {
     color: pasantePalette.text,
@@ -1684,45 +2219,58 @@ const styles = StyleSheet.create({
   },
   metricsRow: {
     flexDirection: 'row',
-    gap: 10,
-    flexWrap: 'wrap',
-  },
-  metricCard: {
-    flexBasis: '31%',
-    flexGrow: 1,
-    minWidth: 102,
-    borderRadius: 22,
-    padding: 14,
+    flexWrap: 'nowrap',
     gap: 8,
   },
+  homeMetricsContent: {
+    gap: 10,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+  },
+  metricCard: {
+    flex: 1,
+    minHeight: 118,
+    minWidth: 50,
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  metricCardCompact: {
+    flex: 1,
+    minHeight: 96,
+    minWidth: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
   metricIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
   },
   metricValue: {
     fontFamily: 'PoppinsSemiBold',
-    fontSize: 22,
+    fontSize: 18,
   },
   metricLabel: {
     color: pasantePalette.text,
     fontFamily: 'PoppinsMedium',
     fontSize: 12,
+    lineHeight: 14,
   },
   metricCaption: {
     color: pasantePalette.textMuted,
     fontFamily: 'PoppinsRegular',
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 10,
+    lineHeight: 12,
   },
   emptyCard: {
     alignItems: 'center',
     backgroundColor: pasantePalette.surface,
-    borderColor: pasantePalette.border,
-    borderRadius: 18,
-    borderWidth: 1,
+    borderRadius: 16,
+    borderWidth: 0,
     gap: 8,
     padding: 18,
   },
@@ -1771,50 +2319,363 @@ const styles = StyleSheet.create({
   stack: {
     gap: 12,
   },
+  trackingPanel: {
+    backgroundColor: pasantePalette.surface,
+    elevation: 1,
+    gap: 16,
+    padding: 23,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    marginHorizontal: -18,
+  },
+  trackingPanelHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  trackingEyebrow: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  
+  },
+  trackingTitle: {
+    color: pasantePalette.dark,
+    fontFamily: 'SulphurPointBold',
+    fontSize: 26,
+    lineHeight: 28,
+  },
+  trackingText: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  trackingProgressBlock: {
+    backgroundColor: pasantePalette.muted,
+    borderColor: pasantePalette.mutedMuted, 
+    borderWidth: 0.5,
+    borderRadius: 16,
+    gap: 10,
+    padding: 14,
+  },
+  trackingProgressHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  trackingProgressLabel: {
+    color: pasantePalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  trackingProgressValue: {
+    color: pasantePalette.green,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 16,
+  },
+  trackingFiltersGrid: {
+    gap: 12,
+  },
+  trackingMetricsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  newsCarouselContent: {
+    gap: 12,
+    paddingHorizontal: 2,
+    paddingVertical: 3,
+  },
+  newsCard: {
+    backgroundColor: pasantePalette.surface,
+    borderRadius: 16,
+    elevation: 1,
+    gap: 8,
+    minHeight: 150,
+    padding: 16,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    width: 230,
+  },
+  newsIcon: {
+    alignItems: 'center',
+    borderRadius: 20,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  newsCopy: {
+    gap: 2,
+    minWidth: 0,
+  },
+  newsType: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+  },
+  newsTitle: {
+    color: pasantePalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  newsText: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  modalBackdrop: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(38, 30, 25, 0.32)',
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingTop: 40,
+  },
+  pasanteSheetModal: {
+    backgroundColor: pasantePalette.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '88%',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    width: '100%',
+  },
+  modalHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    paddingBottom: 12,
+  },
+  modalEyebrow: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  modalTitle: {
+    color: pasantePalette.dark,
+    fontFamily: 'SulphurPointBold',
+    fontSize: 27,
+    lineHeight: 29,
+  },
+  modalSubtitle: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  modalClose: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.surfaceMuted,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  modalContent: {
+    gap: 14,
+    paddingBottom: 26,
+  },
+  modalSectionTitle: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  selectorList: {
+    gap: 9,
+  },
+  selectorCard: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.aquaSoft,
+    borderColor: pasantePalette.border,
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  selectorCardActive: {
+    backgroundColor: pasantePalette.surfaceMuted,
+    borderColor: pasantePalette.primary,
+  },
+  sheetSelectorIcon: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.surfaceMuted,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  selectorTitle: {
+    color: pasantePalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  selectorTitleActive: {
+    color: pasantePalette.primary,
+  },
+  selectorSubtitle: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  modalStatsRow: {
+    flexDirection: 'row',
+    gap: 9,
+  },
+  modalStat: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.aquaSoft,
+    borderRadius: 18,
+    flex: 1,
+    gap: 4,
+    padding: 12,
+  },
+  modalStatValue: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 15,
+  },
+  modalStatLabel: {
+    color: pasantePalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 10,
+    textAlign: 'center',
+  },
+  modalInfoCard: {
+    backgroundColor: pasantePalette.surfaceMuted,
+    borderColor: pasantePalette.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 8,
+    padding: 14,
+  },
+  learnersToggle: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: pasantePalette.primary,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 42,
+    paddingHorizontal: 15,
+  },
+  learnersToggleText: {
+    color: '#FFFFFF',
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
+  },
+  learnersPanel: {
+    backgroundColor: pasantePalette.aquaSoft,
+    borderColor: pasantePalette.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    padding: 12,
+  },
+  searchBox: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.background,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 12,
+  },
+  searchInput: {
+    color: pasantePalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
+  },
+  learnerRow: {
+    alignItems: 'center',
+    borderBottomColor: pasantePalette.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 9,
+  },
   projectCard: {
     backgroundColor: pasantePalette.surface,
-    borderRadius: 24,
+    borderRadius: 16,
+    borderWidth: 0,
     padding: 16,
-    shadowColor: pasantePalette.shadow,
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    elevation: 1,
     gap: 12,
   },
   learnerCard: {
     backgroundColor: pasantePalette.surface,
-    borderColor: pasantePalette.border,
-    borderRadius: 22,
-    borderWidth: 1,
-    elevation: 3,
+    borderRadius: 16,
+    borderWidth: 0,
+    elevation: 1,
     gap: 10,
     padding: 16,
-    shadowColor: pasantePalette.shadow,
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
   },
   taskCard: {
     backgroundColor: pasantePalette.surface,
-    borderRadius: 22,
+    borderRadius: 16,
+    borderWidth: 0,
     padding: 16,
-    shadowColor: pasantePalette.shadow,
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    elevation: 1,
     gap: 10,
+  },
+  taskAttachmentList: {
+    gap: 7,
+  },
+  taskAttachmentItem: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.surfaceMuted,
+    borderColor: pasantePalette.border,
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 38,
+    paddingHorizontal: 10,
+  },
+  taskAttachmentText: {
+    color: pasantePalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
   },
   questionCard: {
     backgroundColor: pasantePalette.surface,
-    borderRadius: 22,
+    borderRadius: 16,
+    borderWidth: 0,
     padding: 16,
-    shadowColor: pasantePalette.shadow,
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    elevation: 1,
     gap: 8,
   },
   cardHeader: {
@@ -1874,7 +2735,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     maxWidth: '100%',
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 7,
   },
   filterChipActive: {
     backgroundColor: pasantePalette.aquaSoft,
@@ -1903,8 +2764,8 @@ const styles = StyleSheet.create({
   secondaryButton: {
     alignSelf: 'flex-start',
     paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
+    paddingVertical: 9,
+    borderRadius: 16,
     backgroundColor: pasantePalette.aqua,
   },
   projectActionButton: {
@@ -1917,16 +2778,16 @@ const styles = StyleSheet.create({
   },
   profileCard: {
     backgroundColor: pasantePalette.surface,
-    paddingHorizontal: 40,
-    paddingVertical: 20,
-    paddingTop: 30,
+    paddingHorizontal: 36,
+    paddingVertical: 24,
+    paddingTop: 28,
     marginHorizontal: -30,
-    shadowColor: pasantePalette.shadow,
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
-    gap: 8,
+    elevation: 1,
+    gap: 12,
   },
   avatarWrap: {
     alignSelf: 'center',
@@ -1956,29 +2817,47 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   fieldInput: {
-    borderRadius: 100,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#d2d2d2',
-    paddingHorizontal: 14,
+    borderColor: pasantePalette.border,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     color: pasantePalette.text,
     fontFamily: 'PoppinsRegular',
     fontSize: 13,
-    backgroundColor: '#fbfbfb',
-    shadowColor: pasantePalette.text,
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    backgroundColor: pasantePalette.aquaSoft,
   },
   fieldInputActive: {
-    borderColor: pasantePalette.secondary,
+    borderColor: pasantePalette.primary,
     backgroundColor: '#FFFFFF',
-    shadowColor: pasantePalette.primary,
-    shadowOpacity: 0.12,
   },
   fieldInputDisabled: {
-    backgroundColor: '#ECECEC',
+    backgroundColor: '#EFEAE6',
     color: pasantePalette.textMuted,
+  },
+  pasanteFichasCard: {
+    backgroundColor: pasantePalette.aquaSoft,
+    borderColor: pasantePalette.secondary,
+    borderRadius: 20,
+    borderWidth: 0.2,
+    gap: 4,
+    marginBottom: 8,
+    marginTop: 12,
+    padding: 14,
+    shadowColor: pasantePalette.secondary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  pasanteFichasTitle: {
+    color: pasantePalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  pasanteFichaItem: {
+    color: pasantePalette.text,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 12,
   },
   profileActions: {
     flexDirection: 'row',
@@ -1991,7 +2870,7 @@ const styles = StyleSheet.create({
   primaryButton: {
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 999,
+    borderRadius: 16,
     backgroundColor: pasantePalette.primary,
   },
   centerBlock: {
@@ -2042,13 +2921,14 @@ const styles = StyleSheet.create({
   },
   toggleRow: {
     backgroundColor: pasantePalette.surface,
-    borderRadius: 22,
+    borderRadius: 16,
+    borderWidth: 0,
     padding: 16,
-    shadowColor: pasantePalette.shadow,
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    elevation: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
