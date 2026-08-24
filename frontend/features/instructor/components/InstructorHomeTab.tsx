@@ -3,6 +3,7 @@ import type { AuthenticatedSession } from '@/features/workspace/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useEffect, useMemo, useState } from 'react';
+import type { ComponentProps } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   instructorAlerts,

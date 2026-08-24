@@ -1,4 +1,5 @@
 export {
+  configureHandsFreeAudioSession,
   createSpeechRecognitionSession,
   isSpeechRecognitionSupported,
   requestSpeechRecognitionPermissions,

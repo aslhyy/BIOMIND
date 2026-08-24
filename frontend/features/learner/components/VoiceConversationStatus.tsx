@@ -7,10 +7,12 @@ type Props = {
   error?: string;
   isActive: boolean;
   partialTranscript?: string;
+  pendingConfirmation?: string;
   status: Status;
 };
 
 const statusCopy: Record<Status, string> = {
+  confirming: 'Confirma antes de enviar',
   error: 'Ocurrió un error',
   idle: 'Listo para conversar',
   listening: 'Escuchando...',
@@ -20,7 +22,7 @@ const statusCopy: Record<Status, string> = {
   'waiting-ai': 'Esperando respuesta...',
 };
 
-export function VoiceConversationStatus({ error, isActive, partialTranscript, status }: Props) {
+export function VoiceConversationStatus({ error, isActive, partialTranscript, pendingConfirmation, status }: Props) {
   const iconName = status === 'speaking'
     ? 'volume-high'
     : status === 'listening'
@@ -39,14 +41,18 @@ export function VoiceConversationStatus({ error, isActive, partialTranscript, st
           <Text style={styles.title}>{statusCopy[status]}</Text>
           <Text style={styles.text}>
             {isActive
-              ? 'El micrófono puede volver a encenderse automáticamente cuando termine la IA.'
+              ? pendingConfirmation
+                ? 'Di “sí” para enviar o “no” para volver a dictar el mensaje.'
+                : 'Habla con naturalidad. Antes de enviar, Biomind repetirá lo que entendió.'
               : 'Toca iniciar para conversar por voz con BIOMIND IA.'}
           </Text>
         </View>
       </View>
 
-      {partialTranscript ? (
-        <Text style={styles.partialText}>{partialTranscript}</Text>
+      {partialTranscript || pendingConfirmation ? (
+        <Text style={styles.partialText}>
+          {partialTranscript || `Pendiente: “${pendingConfirmation}”`}
+        </Text>
       ) : null}
 
       {status === 'error' && error ? (

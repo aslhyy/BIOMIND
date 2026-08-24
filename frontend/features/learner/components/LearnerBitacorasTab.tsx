@@ -3,6 +3,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, Linking, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ImagePreviewModal } from '@/features/workspace/components/ImagePreviewModal';
 import { learnerPalette } from '../theme';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 import { LearnerSectionIntro } from './LearnerSectionIntro';
@@ -130,6 +131,7 @@ export function LearnerBitacorasTab({ session }: Props) {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [expandedObservationIds, setExpandedObservationIds] = useState<string[]>([]);
+  const [previewImageUri, setPreviewImageUri] = useState('');
   const [form, setForm] = useState<FormState>(emptyForm);
 
   useEffect(() => {
@@ -651,6 +653,7 @@ export function LearnerBitacorasTab({ session }: Props) {
                     key={`saved-${evidence.ruta || evidence.nombre || index}`}
                     name={evidence.nombre || 'Evidencia guardada'}
                     imageUri={getEvidenceUri(evidence) || ''}
+                    onOpen={() => setPreviewImageUri(getEvidenceUri(evidence) || '')}
                     onRemove={() => removeSavedEvidence(index)}
                   />
                 ))}
@@ -766,7 +769,9 @@ export function LearnerBitacorasTab({ session }: Props) {
                   {(bitacora.evidencias || []).map((evidence, index) => {
                     const imageUri = getEvidenceUri(evidence);
                     return imageUri ? (
-                      <Image key={`${bitacora.id}-${index}`} source={{ uri: imageUri }} style={styles.evidenceImage} />
+                      <Pressable key={`${bitacora.id}-${index}`} onPress={() => setPreviewImageUri(imageUri)}>
+                        <Image source={{ uri: imageUri }} style={styles.evidenceImage} />
+                      </Pressable>
                     ) : (
                       <Pressable key={`${bitacora.id}-${index}`} onPress={() => openEvidenceAttachment(evidence)} style={styles.fileBadge}>
                         <MaterialCommunityIcons name="file-outline" size={18} color={learnerPalette.primary} />
@@ -828,6 +833,7 @@ export function LearnerBitacorasTab({ session }: Props) {
           setCalendarOpen(false);
         }}
       />
+      <ImagePreviewModal onClose={() => setPreviewImageUri('')} uri={previewImageUri} />
     </>
   );
 }
@@ -975,19 +981,21 @@ function getEvidenceUri(evidence: Evidence) {
 }
 
 function getLearnerObservations(bitacora: Bitacora) {
-  if (Array.isArray(bitacora.observaciones) && bitacora.observaciones.length) {
-    return bitacora.observaciones;
-  }
-
-  if (!bitacora.observacion) {
-    return [];
-  }
-
-  return [{
+  const source = Array.isArray(bitacora.observaciones) && bitacora.observaciones.length
+    ? bitacora.observaciones
+    : bitacora.observacion ? [{
     autorNombre: bitacora.revisadoPorNombre,
     autorRol: bitacora.revisadoPorRol,
     texto: bitacora.observacion,
-  }];
+    }] : [];
+
+  const seen = new Set<string>();
+  return source.filter((item) => {
+    const key = `${item.autorNombre || ''}|${item.autorRol || ''}|${String(item.texto || '').trim().toLocaleLowerCase('es')}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function getGroupMembersText(memberIds: string[], learners: Learner[]) {
@@ -1230,16 +1238,20 @@ function AttachmentButton({
 function AttachmentPreview({
   imageUri,
   name,
+  onOpen,
   onRemove,
 }: {
   imageUri: string;
   name: string;
+  onOpen: () => void;
   onRemove: () => void;
 }) {
   return (
     <View style={styles.attachmentItem}>
       {imageUri ? (
-        <Image source={{ uri: imageUri }} style={styles.attachmentImage} />
+        <Pressable onPress={onOpen}>
+          <Image source={{ uri: imageUri }} style={styles.attachmentImage} />
+        </Pressable>
       ) : (
         <View style={styles.attachmentIcon}>
           <MaterialCommunityIcons name="file-document-outline" size={24} color={learnerPalette.primary} />

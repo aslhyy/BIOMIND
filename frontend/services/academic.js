@@ -288,12 +288,17 @@ export function escucharContextoAcademicoUsuario(session, onData, onError) {
     const effectiveSession = liveUser
       ? {
         ...session,
-        ficha: liveUser.ficha,
-        fichaId: liveUser.fichaId,
-        fichasAsignadas: liveUser.fichasAsignadas,
-        instructorUid: liveUser.instructorUid,
+        ficha: liveUser.ficha || session.ficha,
+        fichaId: liveUser.fichaId || session.fichaId,
+        fichasAsignadas: Array.isArray(liveUser.fichasAsignadas)
+          ? liveUser.fichasAsignadas
+          : session.fichasAsignadas,
+        instructorUid: liveUser.instructorUid || session.instructorUid,
       }
       : session;
+    const supervisingInstructor = effectiveSession.instructorUid
+      ? state.usuarios.find((user) => user.id === effectiveSession.instructorUid)
+      : null;
 
     const fichas = state.fichas.filter((ficha) => {
       if (role === 'aprendiz') {
@@ -307,7 +312,8 @@ export function escucharContextoAcademicoUsuario(session, onData, onError) {
       if (role === 'pasante') {
         return sessionMatchesSheet(effectiveSession, ficha)
           || (ficha.pasantesUids || []).includes(session.uid)
-          || (effectiveSession.instructorUid && (ficha.instructorUids || []).includes(effectiveSession.instructorUid));
+          || (effectiveSession.instructorUid && (ficha.instructorUids || []).includes(effectiveSession.instructorUid))
+          || (supervisingInstructor && sessionMatchesSheet(supervisingInstructor, ficha));
       }
 
       return false;
@@ -1244,4 +1250,3 @@ export async function cambiarEstadoProyecto(proyectoId, estado) {
 
   await updateDoc(doc(db, PROYECTOS_COLLECTION, proyectoId), payload);
 }
-

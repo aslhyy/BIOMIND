@@ -1,6 +1,7 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import { Alert, Image, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ImagePreviewModal } from '@/features/workspace/components/ImagePreviewModal';
 import type { AuthenticatedSession } from '@/features/workspace/types';
 // @ts-ignore
 import { eliminarObservacionBitacora, observarBitacora, revisarBitacora } from '@/services/bitacoras';
@@ -66,6 +67,7 @@ export function BitacorasReviewPanel({ bitacoras, groupMemberNames = [], isGroup
   const [editingObservationId, setEditingObservationId] = useState('');
   const [feedback, setFeedback] = useState('');
   const [saving, setSaving] = useState(false);
+  const [previewImageUri, setPreviewImageUri] = useState('');
 
   const selectedBitacora = bitacoras.find((item) => item.id === selectedId);
 
@@ -272,11 +274,9 @@ export function BitacorasReviewPanel({ bitacoras, groupMemberNames = [], isGroup
             {(selectedBitacora.evidencias || []).map((evidence, index) => {
               const imageUri = getImageUri(evidence);
               return imageUri ? (
-                <Image
-                  key={`${selectedBitacora.id}-${index}`}
-                  source={{ uri: imageUri }}
-                  style={styles.evidenceImage}
-                />
+                <Pressable key={`${selectedBitacora.id}-${index}`} onPress={() => setPreviewImageUri(imageUri)}>
+                  <Image source={{ uri: imageUri }} style={styles.evidenceImage} />
+                </Pressable>
               ) : null;
             })}
             {!selectedBitacora.evidencias?.length ? (
@@ -379,6 +379,7 @@ export function BitacorasReviewPanel({ bitacoras, groupMemberNames = [], isGroup
           )}
           {feedback ? <Text style={styles.feedback}>{feedback}</Text> : null}
         </View>
+        <ImagePreviewModal onClose={() => setPreviewImageUri('')} uri={previewImageUri} />
       </View>
     );
   }
@@ -453,21 +454,23 @@ function DetailSection({
 }
 
 function getBitacoraObservations(bitacora: Bitacora): Observation[] {
-  if (Array.isArray(bitacora.observaciones) && bitacora.observaciones.length) {
-    return bitacora.observaciones;
-  }
-
-  if (!bitacora.observacion) {
-    return [];
-  }
-
-  return [{
+  const source = Array.isArray(bitacora.observaciones) && bitacora.observaciones.length
+    ? bitacora.observaciones
+    : bitacora.observacion ? [{
     id: 'legacy-observacion',
     autorUid: bitacora.revisadoPorUid,
     autorNombre: bitacora.revisadoPorNombre,
     autorRol: bitacora.revisadoPorRol,
     texto: bitacora.observacion,
-  }];
+    }] : [];
+
+  const seen = new Set<string>();
+  return source.filter((item) => {
+    const key = `${item.autorUid || item.autorNombre || ''}|${String(item.texto || '').trim().toLocaleLowerCase('es')}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function ReviewButton({

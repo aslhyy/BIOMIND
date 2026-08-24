@@ -6,11 +6,13 @@ import {
 } from '@/services/speechRecognitionService';
 import { speakText, stopTextToSpeech } from '@/services/textToSpeechService';
 import { extractSendCommand } from '@/services/voiceCommands';
+import { playVoiceCue } from '@/services/voiceCueService';
 
 export type VoiceConversationStatus =
   | 'idle'
   | 'requesting-permission'
   | 'listening'
+  | 'confirming'
   | 'processing'
   | 'waiting-ai'
   | 'speaking'
@@ -27,8 +29,27 @@ type UseVoiceConversationOptions = {
 const DEFAULT_SILENCE_MS = 1500;
 const RESTART_DELAY_MS = 450;
 
+type VoiceInputPhase = 'dictating' | 'confirming' | 'correcting';
+
 function cleanTranscript(value: string) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeConfirmation(value: string) {
+  return cleanTranscript(value)
+    .toLocaleLowerCase('es')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zñ\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getConfirmationIntent(value: string): 'yes' | 'no' | 'unknown' {
+  const normalized = normalizeConfirmation(value);
+  if (/^(si|sí|correcto|confirmo|envia|enviar|de acuerdo|esta bien)\b/.test(normalized)) return 'yes';
+  if (/^(no|corregir|corrige|incorrecto|cambiar|cambio)\b/.test(normalized)) return 'no';
+  return 'unknown';
 }
 
 export function useVoiceConversation({
@@ -43,12 +64,16 @@ export function useVoiceConversation({
   const [partialTranscript, setPartialTranscript] = useState('');
   const [error, setError] = useState('');
   const [isConversationActive, setIsConversationActive] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState('');
 
   const activeRef = useRef(false);
   const canStartRef = useRef(canStart);
   const lastSentTranscriptRef = useRef('');
   const latestTranscriptRef = useRef('');
   const listeningRef = useRef(false);
+  const speakingRef = useRef(false);
+  const inputPhaseRef = useRef<VoiceInputPhase>('dictating');
+  const pendingConfirmationRef = useRef('');
   const onSendMessageRef = useRef(onSendMessage);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendInProgressRef = useRef(false);
@@ -93,7 +118,7 @@ export function useVoiceConversation({
     }
 
     restartTimerRef.current = setTimeout(() => {
-      if (activeRef.current && !listeningRef.current && !sendInProgressRef.current) {
+      if (activeRef.current && !listeningRef.current && !sendInProgressRef.current && !speakingRef.current) {
         startListeningRef.current();
       }
     }, delay);
@@ -107,7 +132,7 @@ export function useVoiceConversation({
   }, [clearSilenceTimer]);
 
   const startListening = useCallback(() => {
-    if (!activeRef.current || !canStartRef.current || listeningRef.current || sendInProgressRef.current) {
+    if (!activeRef.current || !canStartRef.current || listeningRef.current || sendInProgressRef.current || speakingRef.current) {
       return;
     }
 
@@ -120,6 +145,7 @@ export function useVoiceConversation({
     clearSilenceTimer();
     clearRestartTimer();
     latestTranscriptRef.current = '';
+    lastSentTranscriptRef.current = '';
     setPartialTranscript('');
     setError('');
     void stopTextToSpeech();
@@ -137,6 +163,12 @@ export function useVoiceConversation({
         listeningRef.current = false;
         setStatus('error');
         setError(message);
+
+        // Native recognizers can end on silence or transient interruptions. The
+        // hands-free mode remains active and receives a fresh session.
+        if (activeRef.current && !sendInProgressRef.current && !speakingRef.current) {
+          scheduleListeningRestart(900);
+        }
       },
       onResult: (nextTranscript, isFinal) => {
         const cleanText = cleanTranscript(nextTranscript);
@@ -180,7 +212,11 @@ export function useVoiceConversation({
     }
 
     sessionRef.current = session;
-    void Promise.resolve(session.start());
+    void playVoiceCue('open').then(() => {
+      if (activeRef.current && sessionRef.current === session) {
+        return Promise.resolve(session.start());
+      }
+    });
   }, [clearRestartTimer, clearSilenceTimer, language, scheduleListeningRestart, silenceMs]);
 
   useEffect(() => {
@@ -206,35 +242,84 @@ export function useVoiceConversation({
     lastSentTranscriptRef.current = cleanText;
     clearSilenceTimer();
     stopListening();
+    await playVoiceCue('close');
     setTranscript(cleanText);
     setPartialTranscript('');
     setStatus('processing');
 
-    try {
-      setStatus('waiting-ai');
-      const responseText = cleanTranscript(String(await onSendMessageRef.current(cleanText) || ''));
+    let shouldResumeListening = false;
 
-      if (!activeRef.current) {
+    try {
+      if (inputPhaseRef.current === 'confirming') {
+        const intent = getConfirmationIntent(cleanText);
+        stopListening();
+
+        if (intent !== 'yes') {
+          const shouldCorrect = intent === 'no';
+          inputPhaseRef.current = shouldCorrect ? 'correcting' : 'confirming';
+          if (shouldCorrect) {
+            pendingConfirmationRef.current = '';
+            setPendingConfirmation('');
+          }
+          setStatus('speaking');
+          speakingRef.current = true;
+          await speakText(
+            shouldCorrect
+              ? 'De acuerdo. Dime nuevamente el mensaje completo con la corrección.'
+              : 'No pude confirmar. Di sí para enviar o no para corregir.',
+            { language, rate: 0.95 }
+          );
+          shouldResumeListening = activeRef.current;
+          return;
+        }
+
+        const confirmedText = pendingConfirmationRef.current;
+        inputPhaseRef.current = 'dictating';
+        pendingConfirmationRef.current = '';
+        setPendingConfirmation('');
+        setTranscript(confirmedText);
+        setStatus('waiting-ai');
+        const responseText = cleanTranscript(String(await onSendMessageRef.current(confirmedText) || ''));
+
+        if (!activeRef.current) return;
+        if (responseText) {
+          setStatus('speaking');
+          if (speechEnabledRef.current) {
+            speakingRef.current = true;
+            await speakText(responseText, { language, rate: 0.95 });
+          }
+        }
+        shouldResumeListening = activeRef.current;
         return;
       }
 
-      if (responseText) {
-        setStatus('speaking');
-
-        if (speechEnabledRef.current) {
-          await speakText(responseText, { language, rate: 0.95 });
-        }
-      }
-
-      if (activeRef.current) {
-        restartListeningAfterSpeech();
-      }
+      // A dictated or corrected message is always repeated before it can be sent.
+      stopListening();
+      pendingConfirmationRef.current = cleanText;
+      inputPhaseRef.current = 'confirming';
+      setPendingConfirmation(cleanText);
+      setStatus('confirming');
+      speakingRef.current = true;
+      await speakText(`Escuché: ${cleanText}. ¿Deseas enviarlo? Di sí para enviar o no para corregir.`, {
+        language,
+        rate: 0.95,
+      });
+      shouldResumeListening = activeRef.current;
+      return;
     } catch (nextError) {
       const typedError = nextError as { message?: string };
       setStatus('error');
       setError(typedError?.message || 'Ocurrio un error durante la conversacion por voz.');
+      shouldResumeListening = activeRef.current;
     } finally {
+      speakingRef.current = false;
       sendInProgressRef.current = false;
+
+      // Release the processing lock before scheduling. Previously the timer
+      // could fire while this flag was still true and the loop stopped forever.
+      if (shouldResumeListening && activeRef.current) {
+        restartListeningAfterSpeech();
+      }
     }
   }, [clearSilenceTimer, language, restartListeningAfterSpeech, stopListening]);
 
@@ -275,11 +360,15 @@ export function useVoiceConversation({
     activeRef.current = false;
     setIsConversationActive(false);
     sendInProgressRef.current = false;
+    speakingRef.current = false;
     clearRestartTimer();
     clearSilenceTimer();
     stopListening();
-    void stopTextToSpeech();
+    void stopTextToSpeech().then(() => playVoiceCue('close'));
     latestTranscriptRef.current = '';
+    pendingConfirmationRef.current = '';
+    inputPhaseRef.current = 'dictating';
+    setPendingConfirmation('');
     setPartialTranscript('');
     setStatus('idle');
   }, [clearRestartTimer, clearSilenceTimer, stopListening]);
@@ -289,6 +378,10 @@ export function useVoiceConversation({
   return {
     error,
     isConversationActive,
+    isListening: status === 'listening',
+    isProcessing: status === 'processing' || status === 'waiting-ai',
+    isSpeaking: status === 'speaking' || status === 'confirming',
+    pendingConfirmation,
     partialTranscript,
     startConversation,
     startListening,

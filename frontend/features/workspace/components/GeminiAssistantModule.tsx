@@ -11,15 +11,13 @@ import type {
 } from '@/features/workspace/types';
 import { generateGeminiReply } from '@/services/gemini';
 import { saveProjectMessages, subscribeToProjectMessages } from '@/services/messages';
-import {
-  createSpeechRecognitionSession,
-  isSpeechRecognitionSupported,
-} from '@/services/speechRecognition';
+import { useVoiceConversation } from '@/hooks/useVoiceConversation';
 import { extractSendCommand } from '@/services/voiceCommands';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -173,11 +171,9 @@ export function GeminiAssistantModule({
   const [assistantQuestionsEnabled, setAssistantQuestionsEnabled] = useState(
     assistantQuestionsEnabledDefault
   );
-  const [voiceListening, setVoiceListening] = useState(false);
   const [voiceSupportedMessage, setVoiceSupportedMessage] = useState('');
 
   const lastAutoSendDraftRef = useRef('');
-  const voiceSessionRef = useRef<ReturnType<typeof createSpeechRecognitionSession> | null>(null);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) || null,
@@ -277,42 +273,6 @@ export function GeminiAssistantModule({
     };
   }, [assistantQuestionsEnabledDefault, chatChannel, selectedProjectId, session, welcomeHistory]);
 
-  useEffect(() => {
-    return () => {
-      voiceSessionRef.current?.stop();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!autoStartVoiceSignal || voiceListening) {
-      return;
-    }
-
-    if (!voiceEnabled || !isSpeechRecognitionSupported()) {
-      return;
-    }
-
-    voiceSessionRef.current = createSpeechRecognitionSession({
-      onEnd: () => setVoiceListening(false),
-      onError: (message) => {
-        setVoiceListening(false);
-        setVoiceSupportedMessage(message);
-      },
-      onResult: (transcript) => {
-        const sendCommand = extractSendCommand(transcript);
-        setDraft(sendCommand.text || transcript);
-
-        if (sendCommand.shouldSend && sendCommand.text) {
-          stopVoiceCapture();
-          void sendPrompt(sendCommand.text, 'voice');
-        }
-      },
-      onStart: () => setVoiceListening(true),
-    });
-
-    voiceSessionRef.current?.start();
-  }, [autoStartVoiceSignal, voiceEnabled, voiceListening]);
-
   const persistThread = async (nextMessages: WorkspaceChatMessage[], nextQuestionsState = assistantQuestionsEnabled) => {
     if (!selectedProjectId) {
       return;
@@ -348,16 +308,69 @@ export function GeminiAssistantModule({
     setSelectedPromptId('');
   };
 
-  const stopVoiceCapture = () => {
-    voiceSessionRef.current?.stop();
-    setVoiceListening(false);
+  const deleteConversation = (conversation: WorkspaceAssistantConversation) => {
+    Alert.alert(
+      'Eliminar conversación',
+      `¿Quieres eliminar “${conversation.title || 'Conversación'}”? Esta acción no se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            const remaining = visibleConversations.filter((item) => item.id !== conversation.id);
+            let nextConversation = conversation.id === activeConversationId
+              ? remaining[0]
+              : visibleConversations.find((item) => item.id === activeConversationId);
+
+            if (!nextConversation) {
+              const now = new Date().toISOString();
+              nextConversation = {
+                id: buildConversationId(),
+                title: 'Conversación nueva',
+                createdAt: now,
+                updatedAt: now,
+                messageCount: welcomeHistory.length,
+                messages: welcomeHistory,
+              };
+              remaining.push(nextConversation);
+            }
+
+            const nextMessages = nextConversation.messages?.length
+              ? nextConversation.messages
+              : welcomeHistory;
+            setConversations(remaining);
+            setActiveConversationId(nextConversation.id);
+            setMessages(nextMessages);
+            setDraft('');
+            setErrorMessage('');
+
+            try {
+              await saveProjectMessages({
+                assistantQuestionsEnabled,
+                conversationId: nextConversation.id,
+                conversationTitle: nextConversation.title,
+                existingConversations: remaining.filter((item) => item.id !== nextConversation.id),
+                messages: nextMessages,
+                projectId: selectedProjectId,
+                projectTitle: selectedProject?.title || emptyStateLabel,
+                session,
+                chatChannel,
+              });
+            } catch (error) {
+              setErrorMessage('No pudimos eliminar la conversación. Intenta nuevamente.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const sendPrompt = async (promptText: string, inputMode: 'manual' | 'voice' = 'manual') => {
     const normalized = promptText.trim();
 
     if (!normalized || loading || !selectedProjectId) {
-      return;
+      return '';
     }
 
     const userMessage: WorkspaceChatMessage = {
@@ -413,12 +426,27 @@ export function GeminiAssistantModule({
 
       setMessages(nextMessages);
       await persistThread(nextMessages);
+      return responseText;
     } catch (error) {
       setErrorMessage(mapGeminiError(error));
+      return '';
     } finally {
       setLoading(false);
     }
   };
+
+  const voiceConversation = useVoiceConversation({
+    canStart: voiceEnabled && Boolean(selectedProjectId),
+    language: 'es-CO',
+    onSendMessage: (text) => sendPrompt(text, 'voice'),
+    silenceMs: 1500,
+    speechEnabled: true,
+  });
+
+  useEffect(() => {
+    if (!autoStartVoiceSignal || !voiceEnabled || voiceConversation.isConversationActive) return;
+    void voiceConversation.startConversation();
+  }, [autoStartVoiceSignal, voiceEnabled, voiceConversation.isConversationActive]);
 
   const handlePromptSelect = (prompt: WorkspaceAssistantPrompt) => {
     setSelectedPromptId(prompt.id);
@@ -455,37 +483,12 @@ export function GeminiAssistantModule({
       return;
     }
 
-    if (voiceListening) {
-      stopVoiceCapture();
+    if (voiceConversation.isConversationActive) {
+      voiceConversation.stopConversation();
       return;
     }
 
-    if (!isSpeechRecognitionSupported()) {
-      setVoiceSupportedMessage(
-        'Para usar el microfono nativo abre Biomind desde la development build instalada. Expo Go no incluye el modulo de reconocimiento de voz.'
-      );
-      return;
-    }
-
-    voiceSessionRef.current = createSpeechRecognitionSession({
-      onEnd: () => setVoiceListening(false),
-      onError: (message) => {
-        setVoiceListening(false);
-        setVoiceSupportedMessage(message);
-      },
-      onResult: (transcript) => {
-        const sendCommand = extractSendCommand(transcript);
-        setDraft(sendCommand.text || transcript);
-
-        if (sendCommand.shouldSend && sendCommand.text) {
-          stopVoiceCapture();
-          void sendPrompt(sendCommand.text, 'voice');
-        }
-      },
-      onStart: () => setVoiceListening(true),
-    });
-
-    voiceSessionRef.current?.start();
+    void voiceConversation.startConversation();
   };
 
   const handleQuestionsToggle = async (value: boolean) => {
@@ -619,29 +622,40 @@ export function GeminiAssistantModule({
               const isActive = conversation.id === activeConversationId;
 
               return (
-                <Pressable
+                <View
                   key={conversation.id}
-                  onPress={() => openConversation(conversation)}
                   style={[
                     styles.conversationChip,
                     { backgroundColor: assistantTone.surfaceMuted, borderColor: assistantTone.border },
                     isActive && { backgroundColor: assistantTone.primary, borderColor: assistantTone.primary },
                   ]}>
-                  <Text numberOfLines={1} style={[
-                    styles.conversationChipTitle,
-                    { color: assistantTone.text },
-                    isActive && { color: assistantTone.surface },
-                  ]}>
-                    {conversation.title || 'Conversación'}
-                  </Text>
-                  <Text style={[
-                    styles.conversationChipMeta,
-                    { color: assistantTone.textMuted },
-                    isActive && { color: assistantTone.surface },
-                  ]}>
-                    {Math.max(0, conversation.messageCount - 1)} mensajes
-                  </Text>
-                </Pressable>
+                  <Pressable onPress={() => openConversation(conversation)} style={styles.conversationChipMain}>
+                    <Text numberOfLines={1} style={[
+                      styles.conversationChipTitle,
+                      { color: assistantTone.text },
+                      isActive && { color: assistantTone.surface },
+                    ]}>
+                      {conversation.title || 'Conversación'}
+                    </Text>
+                    <Text style={[
+                      styles.conversationChipMeta,
+                      { color: assistantTone.textMuted },
+                      isActive && { color: assistantTone.surface },
+                    ]}>
+                      {Math.max(0, conversation.messageCount - 1)} mensajes
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel={`Eliminar ${conversation.title || 'conversación'}`}
+                    onPress={() => deleteConversation(conversation)}
+                    style={styles.deleteConversationButton}>
+                    <MaterialCommunityIcons
+                      name="trash-can-outline"
+                      size={16}
+                      color={isActive ? assistantTone.surface : assistantTone.textMuted}
+                    />
+                  </Pressable>
+                </View>
               );
             })}
           </ScrollView>
@@ -785,6 +799,44 @@ export function GeminiAssistantModule({
               <Text style={[styles.infoText, { color: assistantTone.lavanderText }]}>{voiceSupportedMessage}</Text>
             </View>
           ) : null}
+
+          {voiceConversation.isConversationActive || voiceConversation.status === 'error' ? (
+            <View style={[
+              styles.infoCard,
+              {
+                backgroundColor: assistantTone.softGreen,
+                borderColor: assistantTone.border,
+                borderLeftColor: assistantTone.primary,
+              },
+            ]}>
+              <MaterialCommunityIcons
+                name={voiceConversation.isListening ? 'microphone' : voiceConversation.isSpeaking ? 'volume-high' : 'message-processing-outline'}
+                size={18}
+                color={assistantTone.primary}
+              />
+              <View style={styles.voiceConfirmationCopy}>
+                <Text style={[styles.infoText, { color: assistantTone.text }]}>
+                  {voiceConversation.pendingConfirmation
+                    ? 'Confirma antes de enviar: di “sí” o “no”.'
+                    : voiceConversation.isListening
+                      ? 'Escuchando... habla con naturalidad.'
+                      : voiceConversation.isSpeaking
+                        ? 'Biomind está hablando...'
+                        : voiceConversation.isProcessing
+                          ? 'Procesando tu mensaje...'
+                          : 'Conversación por voz activa.'}
+                </Text>
+                {voiceConversation.partialTranscript || voiceConversation.pendingConfirmation ? (
+                  <Text style={[styles.voiceTranscript, { color: assistantTone.dark }]}>
+                    {voiceConversation.partialTranscript || `Escuché: “${voiceConversation.pendingConfirmation}”`}
+                  </Text>
+                ) : null}
+                {voiceConversation.error ? (
+                  <Text style={styles.voiceError}>{voiceConversation.error}</Text>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
         </View>
 
         <View style={[
@@ -805,7 +857,7 @@ export function GeminiAssistantModule({
 
           <View style={[styles.composerFooter, { borderTopColor: assistantTone.composerBorder }]}>
             <Text style={[styles.composerHint, { color: assistantTone.composerHint }]}>
-              Di "enviar" al final del dictado para mandar el mensaje automáticamente.
+              Biomind repetirá lo escuchado. Di “sí” para enviar o “no” para corregir.
             </Text>
 
             <View style={styles.actionsRow}>
@@ -817,16 +869,16 @@ export function GeminiAssistantModule({
                     backgroundColor: assistantTone.surfaceMuted,
                     borderColor: assistantTone.border,
                   },
-                  voiceListening && {
+                  voiceConversation.isConversationActive && {
                     backgroundColor: assistantTone.secondary,
                     borderColor: assistantTone.secondary,
                   },
                   !voiceEnabled && styles.iconButtonDisabled,
                 ]}>
                 <MaterialCommunityIcons
-                  name={voiceListening ? 'microphone' : 'microphone-outline'}
+                  name={voiceConversation.isConversationActive ? 'microphone-off' : 'microphone-outline'}
                   size={28}
-                  color={voiceListening ? assistantTone.background : assistantTone.primary}
+                  color={voiceConversation.isConversationActive ? assistantTone.background : assistantTone.primary}
                 />
               </Pressable>
               <Pressable
@@ -1080,13 +1132,25 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
   conversationChip: {
+    alignItems: 'center',
     borderRadius: 14,
     borderWidth: 1,
-    gap: 2,
+    flexDirection: 'row',
     minWidth: 138,
     maxWidth: 190,
+    overflow: 'hidden',
+  },
+  conversationChipMain: {
+    flex: 1,
+    gap: 2,
     paddingHorizontal: 12,
     paddingVertical: 9,
+  },
+  deleteConversationButton: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
   },
   conversationChipTitle: {
     fontFamily: 'PoppinsSemiBold',
@@ -1276,6 +1340,25 @@ const styles = StyleSheet.create({
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
     lineHeight: 18,
+  },
+  voiceConfirmationCopy: {
+    flex: 1,
+    gap: 6,
+  },
+  voiceTranscript: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    fontFamily: 'PoppinsMedium',
+    fontSize: 12,
+    lineHeight: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  voiceError: {
+    color: '#B84A62',
+    fontFamily: 'PoppinsMedium',
+    fontSize: 11,
+    lineHeight: 16,
   },
 
   // â”€â”€ COMPOSER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

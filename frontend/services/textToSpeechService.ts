@@ -1,4 +1,5 @@
 import * as Speech from 'expo-speech';
+import { configureHandsFreeAudioSession } from './speechRecognitionService';
 
 type SpeakOptions = {
   language?: string;
@@ -25,6 +26,7 @@ export async function speakText(text: string, options: SpeakOptions = {}) {
   }
 
   await stopTextToSpeech();
+  configureHandsFreeAudioSession();
 
   await new Promise<void>((resolve) => {
     let settled = false;

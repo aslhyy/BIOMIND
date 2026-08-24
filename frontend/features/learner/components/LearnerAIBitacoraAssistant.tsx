@@ -3,10 +3,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Speech from 'expo-speech';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { learnerPalette } from '@/features/learner/theme';
 import { FormattedMarkdownText } from '@/features/workspace/components/FormattedMarkdownText';
+import { ImagePreviewModal } from '@/features/workspace/components/ImagePreviewModal';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import type { AuthenticatedSession, WorkspaceChatMessage } from '@/features/workspace/types';
 import { useVoiceConversation } from '@/hooks/useVoiceConversation';
@@ -58,6 +59,7 @@ type AssistantConversation = {
   updatedAt: string;
   messageCount: number;
   messages: AssistantMessage[];
+  titleGenerated?: boolean;
 };
 
 type FieldKey = 'fecha' | 'descripcion' | 'avance' | 'dificultades' | 'archivoUrl';
@@ -142,6 +144,11 @@ function cleanSpeechText(value: string) {
 
 function isYes(value: string) {
   return /\b(si|sí|claro|dale|bueno|hagamos|pregunta|continua|continúa)\b/i.test(value);
+}
+
+function isSaveCommand(value: string) {
+  const normalized = value.toLocaleLowerCase('es').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /\b(guardar|guarda|crear|crea|registrar|registra)\b.*\b(bitacora|registro)\b/.test(normalized);
 }
 
 function isNo(value: string) {
@@ -264,8 +271,12 @@ export function LearnerAIBitacoraAssistant({
   const [saving, setSaving] = useState(false);
   const [speechEnabled, setSpeechEnabled] = useState(voiceSuggestionsEnabled);
   const [speakingMessageId, setSpeakingMessageId] = useState('');
+  const [showBitacoraDetails, setShowBitacoraDetails] = useState(false);
+  const [showFullConversation, setShowFullConversation] = useState(false);
+  const [previewImageUri, setPreviewImageUri] = useState('');
   const lastAutoSendDraftRef = useRef('');
   const composerInputRef = useRef<TextInput | null>(null);
+  const titleRequestsRef = useRef(new Set<string>());
 
   useEffect(() => {
     const handleError = (error: any) =>
@@ -340,8 +351,10 @@ export function LearnerAIBitacoraAssistant({
     [activeConversationId, conversations]
   );
   const conversationTitle = useMemo(
-    () => getConversationTitle(messages, activeConversation?.title || 'Conversación nueva'),
-    [activeConversation?.title, messages]
+    () => activeConversation?.titleGenerated
+      ? activeConversation.title
+      : getConversationTitle(messages, activeConversation?.title || 'Conversación nueva'),
+    [activeConversation?.title, activeConversation?.titleGenerated, messages]
   );
   const visibleConversations = useMemo(() => {
     if (conversations.some((conversation) => conversation.id === activeConversationId)) {
@@ -499,11 +512,14 @@ export function LearnerAIBitacoraAssistant({
     const currentConversation = conversations.find((conversation) => conversation.id === activeConversationId);
     const nextConversation: AssistantConversation = {
       id: activeConversationId,
-      title: getConversationTitle(nextMessages, currentConversation?.title || 'Conversación nueva'),
+      title: currentConversation?.titleGenerated
+        ? currentConversation.title
+        : getConversationTitle(nextMessages, currentConversation?.title || 'Conversación nueva'),
       createdAt: currentConversation?.createdAt || now,
       updatedAt: now,
       messageCount: nextMessages.length,
       messages: nextMessages,
+      titleGenerated: currentConversation?.titleGenerated,
     };
     const nextConversations = [
       nextConversation,
@@ -512,6 +528,35 @@ export function LearnerAIBitacoraAssistant({
 
     setConversations(nextConversations);
     void AsyncStorage.setItem(conversationStorageKey, JSON.stringify(nextConversations));
+  };
+
+  const generateConversationTitle = async (conversationId: string, nextMessages: AssistantMessage[]) => {
+    if (!conversationStorageKey || titleRequestsRef.current.has(conversationId)) return;
+    titleRequestsRef.current.add(conversationId);
+
+    const fallback = getConversationTitle(nextMessages);
+    let generatedTitle = fallback;
+    try {
+      const result = await generateGeminiReply({
+        history: nextMessages.slice(-6).map((message): WorkspaceChatMessage => ({
+          id: message.id,
+          role: message.role === 'assistant' ? 'model' : 'user',
+          text: message.text,
+        })),
+        systemInstruction: 'Crea un título de máximo cinco palabras para esta conversación. Devuelve únicamente el título, sin comillas ni puntuación final.',
+      });
+      generatedTitle = result.replace(/["“”.'\n]/g, '').trim().slice(0, 52) || fallback;
+    } catch {
+      // The local fallback still produces a useful title when Gemini is unavailable.
+    }
+
+    setConversations((current) => {
+      const updated = current.map((conversation) => conversation.id === conversationId
+        ? { ...conversation, title: generatedTitle, titleGenerated: true }
+        : conversation);
+      void AsyncStorage.setItem(conversationStorageKey, JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const pushMessage = (message: Omit<AssistantMessage, 'id'>, options: { speak?: boolean } = {}) => {
@@ -524,6 +569,10 @@ export function LearnerAIBitacoraAssistant({
     setMessages((current) => {
       const nextMessages = [...current, nextMessage];
       persistConversationMessages(nextMessages);
+      const currentConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+      if (nextMessage.role === 'user' && !currentConversation?.titleGenerated) {
+        void generateConversationTitle(activeConversationId, nextMessages);
+      }
       return nextMessages;
     });
 
@@ -582,6 +631,44 @@ export function LearnerAIBitacoraAssistant({
     setFeedback('');
   };
 
+  const deleteConversation = (conversation: AssistantConversation) => {
+    Alert.alert(
+      'Eliminar conversación',
+      `¿Quieres eliminar “${conversation.title || 'Conversación'}”? Esta acción no se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: () => {
+            let remaining = conversations.filter((item) => item.id !== conversation.id);
+            if (!remaining.length && selectedProject) {
+              const firstMessage: AssistantMessage = {
+                id: buildMessageId('assistant'),
+                role: 'assistant',
+                text: getFieldQuestion('fecha', selectedProject.titulo || 'este proyecto', today()),
+              };
+              remaining = [{
+                id: buildConversationId(),
+                title: 'Conversación nueva',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                messageCount: 1,
+                messages: [firstMessage],
+              }];
+            }
+            setConversations(remaining);
+            if (conversation.id === activeConversationId) {
+              setActiveConversationId(remaining[0]?.id || '');
+              setMessages(remaining[0]?.messages || []);
+            }
+            void AsyncStorage.setItem(conversationStorageKey, JSON.stringify(remaining));
+          },
+        },
+      ]
+    );
+  };
+
   const askNextField = (nextField: FieldKey, options: { speak?: boolean } = {}) => {
     if (!selectedProject) return '';
     const text = getFieldQuestion(nextField, selectedProject.titulo || 'este proyecto', form.fecha);
@@ -590,8 +677,11 @@ export function LearnerAIBitacoraAssistant({
     return text;
   };
 
-  const completeRequiredFlow = (options: { speak?: boolean } = {}) => {
-    if (autoSaveEnabled && form.descripcion.trim() && form.avance.trim()) {
+  const completeRequiredFlow = (
+    completedForm: FormState,
+    options: { speak?: boolean } = {}
+  ) => {
+    if (autoSaveEnabled && completedForm.descripcion.trim() && completedForm.avance.trim()) {
       const text = 'Ya tengo los campos principales. Guardaré la bitácora automáticamente porque lo activaste en tu perfil.';
       pushMessage({ role: 'assistant', text }, options);
       setTimeout(() => {
@@ -600,16 +690,12 @@ export function LearnerAIBitacoraAssistant({
       return text;
     }
 
-    const text = assistantQuestionsEnabled
-      ? 'Ya tengo los campos principales. ¿Quieres que te haga más preguntas sobre el proyecto antes de crear la bitácora?'
-      : 'Listo. Revisa el resumen y toca "Crear bitácora" cuando quieras guardarla.';
-
     if (assistantQuestionsEnabled) {
-      setAwaitingExtraConsent(true);
-      pushMessage({ role: 'assistant', text }, options);
-      return text;
+      setAwaitingExtraConsent(false);
+      return askGeminiFollowUp(options, completedForm, []);
     }
 
+    const text = 'Listo. Revisa el resumen y toca “Crear bitácora”, o di “guardar bitácora”.';
     pushMessage({ role: 'assistant', text }, options);
     return text;
   };
@@ -618,16 +704,21 @@ export function LearnerAIBitacoraAssistant({
     const currentIndex = guidedOrder.indexOf(field);
     const nextField = guidedOrder[currentIndex + 1];
 
-    setForm((current) => applyFieldValue(field, answer, current));
+    const completedForm = applyFieldValue(field, answer, form);
+    setForm(completedForm);
 
     if (nextField) {
       return askNextField(nextField, options);
     }
 
-    return completeRequiredFlow(options);
+    return completeRequiredFlow(completedForm, options);
   };
 
-  const askGeminiFollowUp = async (options: { speak?: boolean } = {}) => {
+  const askGeminiFollowUp = async (
+    options: { speak?: boolean } = {},
+    formSnapshot = form,
+    answerSnapshot = extraAnswers
+  ) => {
     if (!selectedProject) return '';
 
     setLoading(true);
@@ -644,10 +735,10 @@ export function LearnerAIBitacoraAssistant({
               `Descripción del proyecto: ${selectedProject.descripcion || 'No registrada'}`,
               `Competencia: ${selectedProject.competenciaNombre || 'No registrada'}`,
               `RAP: ${selectedProject.rapDescripcion || 'No registrado'}`,
-              `Actividad realizada: ${form.descripcion || 'Pendiente'}`,
-              `Avance alcanzado: ${form.avance || 'Pendiente'}`,
-              `Dificultades: ${form.dificultades || 'No registradas'}`,
-              `Preguntas ya hechas: ${extraAnswers.map((item) => item.question).join(' | ') || 'Ninguna'}`,
+              `Actividad realizada: ${formSnapshot.descripcion || 'Pendiente'}`,
+              `Avance alcanzado: ${formSnapshot.avance || 'Pendiente'}`,
+              `Dificultades: ${formSnapshot.dificultades || 'No registradas'}`,
+              `Preguntas ya hechas: ${answerSnapshot.map((item) => item.question).join(' | ') || 'Ninguna'}`,
             ].join('\n'),
           },
         ],
@@ -655,13 +746,13 @@ export function LearnerAIBitacoraAssistant({
           'Eres BIOMIND IA para aprendices de biotecnología vegetal. Haz una sola pregunta breve, clara y útil para completar mejor una bitácora académica. No expliques, no saludes, no uses formato de lista.',
       });
 
-      const cleanQuestion = question.split('\n').find(Boolean)?.trim() || fallbackFollowUpQuestion(extraAnswers.length);
+      const cleanQuestion = question.split('\n').find(Boolean)?.trim() || fallbackFollowUpQuestion(answerSnapshot.length);
       setCurrentExtraQuestion(cleanQuestion);
       setAwaitingExtraConsent(false);
       pushMessage({ role: 'assistant', text: cleanQuestion }, options);
       return cleanQuestion;
     } catch (error) {
-      const fallback = fallbackFollowUpQuestion(extraAnswers.length);
+      const fallback = fallbackFollowUpQuestion(answerSnapshot.length);
       setCurrentExtraQuestion(fallback);
       setAwaitingExtraConsent(false);
       setFeedback(mapGeminiError(error));
@@ -674,10 +765,16 @@ export function LearnerAIBitacoraAssistant({
 
   const answerExtraQuestion = (answer: string, options: { speak?: boolean } = {}) => {
     const question = currentExtraQuestion || 'Pregunta complementaria';
-    const text = 'Perfecto. ¿Quieres que te haga otra pregunta complementaria o prefieres crear la bitácora?';
-    setExtraAnswers((current) => [...current, { question, answer }]);
+    const nextAnswers = [...extraAnswers, { question, answer }];
+    setExtraAnswers(nextAnswers);
     setCurrentExtraQuestion('');
-    setAwaitingExtraConsent(true);
+    setAwaitingExtraConsent(false);
+
+    if (nextAnswers.length < 2) {
+      return askGeminiFollowUp(options, form, nextAnswers);
+    }
+
+    const text = 'Perfecto. La información está completa. Di “guardar bitácora” o usa el botón Crear bitácora.';
     pushMessage({ role: 'assistant', text }, options);
     return text;
   };
@@ -733,6 +830,12 @@ export function LearnerAIBitacoraAssistant({
 
     pushMessage({ role: 'user', text, mode: inputMode });
     setDraft('');
+
+    if (isSaveCommand(text)) {
+      setAwaitingExtraConsent(false);
+      setCurrentExtraQuestion('');
+      return saveBitacora(options);
+    }
 
     if (awaitingExtraConsent) {
       if (isYes(text)) {
@@ -924,25 +1027,29 @@ export function LearnerAIBitacoraAssistant({
     }));
   };
 
-  const saveBitacora = async () => {
+  const saveBitacora = async (options: { speak?: boolean } = {}) => {
     if (!selectedProject) {
-      setFeedback('Selecciona un proyecto.');
-      return;
+      const message = 'Selecciona un proyecto antes de guardar la bitácora.';
+      setFeedback(message);
+      return message;
     }
 
     if (!form.descripcion.trim()) {
-      setFeedback('Falta la actividad realizada.');
-      return;
+      const message = 'Aún falta la actividad realizada antes de guardar.';
+      setFeedback(message);
+      return message;
     }
 
     if (!form.avance.trim()) {
-      setFeedback('Falta el avance alcanzado.');
-      return;
+      const message = 'Aún falta el avance alcanzado antes de guardar.';
+      setFeedback(message);
+      return message;
     }
 
     if (form.archivoUrl.trim() && !/^https:\/\/\S+/i.test(form.archivoUrl.trim())) {
-      setFeedback('El enlace externo debe comenzar por https://.');
-      return;
+      const message = 'El enlace externo debe comenzar por https://.';
+      setFeedback(message);
+      return message;
     }
 
     const extraNotes = buildExtraNotes(extraAnswers);
@@ -968,17 +1075,21 @@ export function LearnerAIBitacoraAssistant({
         proyectoTitulo: selectedProject.titulo || 'Proyecto',
       });
 
-      setFeedback('Bitácora creada correctamente desde BIOMIND IA.');
+      const successMessage = 'Bitácora guardada correctamente. Puedes verla en Bitácoras y evidencias.';
+      setFeedback(successMessage);
       pushMessage({
         role: 'assistant',
-        text: 'Bitácora creada correctamente. Puedes verla en Bitácoras y evidencias.',
-      });
+        text: successMessage,
+      }, options);
       setExtraAnswers([]);
       setCurrentExtraQuestion('');
       setAwaitingExtraConsent(false);
+      return successMessage;
     } catch (error) {
       const typedError = error as { message?: string };
-      setFeedback(typedError?.message || 'No pudimos crear la bitácora.');
+      const errorMessage = typedError?.message || 'No pudimos guardar la bitácora.';
+      setFeedback(errorMessage);
+      return errorMessage;
     } finally {
       setSaving(false);
     }
@@ -1042,14 +1153,14 @@ export function LearnerAIBitacoraAssistant({
             accessibilityRole="switch"
             accessibilityState={{ checked: assistantQuestionsEnabled }}
             onPress={() => toggleGuidedMode(!assistantQuestionsEnabled)}
-            style={styles.toggleCard}>
+            style={[styles.toggleCard, assistantQuestionsEnabled && styles.toggleCardActive]}>
             <View style={styles.toggleCopy}>
               <Text style={styles.toggleTitle}>Preguntas automáticas</Text>
               <Text style={styles.toggleText}>
                 Actívalas para que la IA te guíe campo por campo y haga preguntas complementarias.
               </Text>
             </View>
-            <View style={[styles.toggleStateBadge, !assistantQuestionsEnabled && styles.toggleStateBadgeOff]}>
+            <View style={[styles.toggleStateBadge, assistantQuestionsEnabled && styles.toggleStateBadgeActive, !assistantQuestionsEnabled && styles.toggleStateBadgeOff]}>
               <Text style={[styles.toggleStateText, !assistantQuestionsEnabled && styles.toggleStateTextOff]}>
                 {assistantQuestionsEnabled ? 'Activo' : 'Inactivo'}
               </Text>
@@ -1107,11 +1218,30 @@ export function LearnerAIBitacoraAssistant({
                 error={voiceConversation.error}
                 isActive={voiceConversation.isConversationActive}
                 partialTranscript={voiceConversation.partialTranscript}
+                pendingConfirmation={voiceConversation.pendingConfirmation}
                 status={voiceConversation.status}
               />
             ) : null}
           </View>
 
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setShowBitacoraDetails((current) => !current)}
+            style={styles.sectionToggle}>
+            <View style={styles.sectionToggleCopy}>
+              <Text style={styles.sectionToggleTitle}>Resumen y evidencias</Text>
+              <Text style={styles.sectionToggleText}>
+                {showBitacoraDetails ? 'Ocultar campos de la bitácora' : 'Revisar campos, adjuntos y guardar'}
+              </Text>
+            </View>
+            <MaterialCommunityIcons
+              name={showBitacoraDetails ? 'chevron-up' : 'chevron-down'}
+              size={22}
+              color={learnerPalette.primary}
+            />
+          </Pressable>
+
+          {showBitacoraDetails ? <>
           <View style={styles.formPreview}>
             <FieldPreview active={activeField === 'fecha'} label="Fecha" value={form.fecha} onPress={() => setActiveField('fecha')} />
             <FieldPreview active={activeField === 'descripcion'} label="Actividad realizada" value={form.descripcion} onPress={() => setActiveField('descripcion')} />
@@ -1143,20 +1273,29 @@ export function LearnerAIBitacoraAssistant({
             {form.evidencias.length ? (
               <View style={styles.attachmentList}>
                 {form.evidencias.map((evidence, index) => (
-                  <View key={`${evidence.uri}-${index}`} style={styles.attachmentItem}>
-                    <MaterialCommunityIcons
-                      name={evidence.tipo === 'imagen' ? 'image-outline' : 'file-document-outline'}
-                      size={18}
-                      color={learnerPalette.primary}
-                    />
+                  <Pressable
+                    disabled={evidence.tipo !== 'imagen'}
+                    key={`${evidence.uri}-${index}`}
+                    onPress={() => setPreviewImageUri(evidence.uri)}
+                    style={styles.attachmentItem}>
+                    {evidence.tipo === 'imagen' ? (
+                      <Image source={{ uri: evidence.uri }} style={styles.attachmentThumbnail} />
+                    ) : (
+                      <MaterialCommunityIcons name="file-document-outline" size={18} color={learnerPalette.primary} />
+                    )}
                     <View style={styles.attachmentCopy}>
                       <Text numberOfLines={1} style={styles.attachmentTitle}>{evidence.nombre}</Text>
                       <Text style={styles.attachmentMeta}>{evidence.tipo === 'imagen' ? 'Imagen' : 'Documento'}</Text>
                     </View>
-                    <Pressable onPress={() => removeEvidence(index)} style={styles.removeEvidenceButton}>
+                    <Pressable
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        removeEvidence(index);
+                      }}
+                      style={styles.removeEvidenceButton}>
                       <MaterialCommunityIcons name="close" size={16} color={learnerPalette.textMuted} />
                     </Pressable>
-                  </View>
+                  </Pressable>
                 ))}
               </View>
             ) : (
@@ -1190,7 +1329,7 @@ export function LearnerAIBitacoraAssistant({
                 Se guardará como bitácora enviada para {selectedProject.titulo || 'el proyecto seleccionado'}.
               </Text>
             </View>
-            <Pressable disabled={saving} onPress={saveBitacora} style={styles.saveButton}>
+            <Pressable disabled={saving} onPress={() => void saveBitacora()} style={styles.saveButton}>
               {saving ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
@@ -1201,6 +1340,7 @@ export function LearnerAIBitacoraAssistant({
               )}
             </Pressable>
           </View>
+          </> : null}
 
           <View style={styles.chatCard}>
             <View style={styles.conversationPanel}>
@@ -1218,23 +1358,39 @@ export function LearnerAIBitacoraAssistant({
                   const active = conversation.id === activeConversationId;
 
                   return (
-                    <Pressable
-                      key={conversation.id}
-                      onPress={() => openConversation(conversation)}
-                      style={[styles.conversationChip, active && styles.conversationChipActive]}>
-                      <Text numberOfLines={1} style={[styles.conversationChipTitle, active && styles.conversationChipTitleActive]}>
-                        {conversation.title || 'Conversación'}
-                      </Text>
-                      <Text style={[styles.conversationChipMeta, active && styles.conversationChipMetaActive]}>
-                        {Math.max(0, conversation.messageCount - 1)} mensajes
-                      </Text>
-                    </Pressable>
+                    <View key={conversation.id} style={[styles.conversationChip, active && styles.conversationChipActive]}>
+                      <Pressable onPress={() => openConversation(conversation)} style={styles.conversationChipMain}>
+                        <Text numberOfLines={1} style={[styles.conversationChipTitle, active && styles.conversationChipTitleActive]}>
+                          {conversation.title || 'Conversación'}
+                        </Text>
+                        <Text style={[styles.conversationChipMeta, active && styles.conversationChipMetaActive]}>
+                          {Math.max(0, conversation.messageCount - 1)} mensajes
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={`Eliminar ${conversation.title || 'conversación'}`}
+                        onPress={() => deleteConversation(conversation)}
+                        style={styles.deleteConversationButton}>
+                        <MaterialCommunityIcons
+                          name="trash-can-outline"
+                          size={16}
+                          color={active ? '#FFFFFF' : learnerPalette.textMuted}
+                        />
+                      </Pressable>
+                    </View>
                   );
                 })}
               </ScrollView>
             </View>
             <View style={styles.chatHeader}>
               <Text style={styles.chatTitle}>{conversationTitle}</Text>
+              {messages.length > 4 ? (
+                <Pressable onPress={() => setShowFullConversation((current) => !current)}>
+                  <Text style={styles.historyToggleText}>
+                    {showFullConversation ? 'Ver recientes' : `Ver todo (${messages.length})`}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
             <View style={styles.messageList}>
               {loadingConversations ? (
@@ -1243,7 +1399,7 @@ export function LearnerAIBitacoraAssistant({
                   <Text style={styles.loadingText}>Cargando conversaciones...</Text>
                 </View>
               ) : null}
-              {messages.map((message) => (
+              {(showFullConversation ? messages : messages.slice(-4)).map((message) => (
                 <View
                   key={message.id}
                   style={[
@@ -1311,7 +1467,7 @@ export function LearnerAIBitacoraAssistant({
               multiline
               placeholder={
                 voiceConversation.isConversationActive
-                  ? 'Te escucho. Habla y enviaré cuando termines...'
+                  ? 'Te escucho. Confirmarás antes de enviar...'
                   : assistantQuestionsEnabled
                     ? 'Responde a la pregunta de BIOMIND IA...'
                     : 'Escribe una duda del proyecto o inicia la conversación por voz...'
@@ -1323,27 +1479,9 @@ export function LearnerAIBitacoraAssistant({
             />
             <View style={styles.composerFooter}>
               <Text style={styles.composerHint}>
-                Di "enviar" al final del dictado para mandar tu respuesta automáticamente.
+                Biomind repetirá lo escuchado. Di sí para enviar o no para corregir.
               </Text>
               <View style={styles.actionsRow}>
-                <Pressable
-                  accessibilityLabel={voiceConversation.isConversationActive ? 'Finalizar conversación' : 'Iniciar conversación'}
-                  accessibilityRole="button"
-                  onPress={() => {
-                    if (voiceConversation.isConversationActive) {
-                      voiceConversation.startListening();
-                      return;
-                    }
-
-                    void voiceConversation.startConversation();
-                  }}
-                  style={[styles.micButton, voiceConversation.isConversationActive && styles.micButtonActive]}>
-                  <MaterialCommunityIcons
-                    name={voiceConversation.isConversationActive ? 'microphone' : 'microphone-outline'}
-                    size={29}
-                    color={voiceConversation.isConversationActive ? '#FFFFFF' : learnerPalette.primary}
-                  />
-                </Pressable>
                 <Pressable
                   disabled={!draft.trim() || loading}
                   onPress={() => handleSend('manual')}
@@ -1357,6 +1495,7 @@ export function LearnerAIBitacoraAssistant({
       ) : null}
 
       {feedback ? <Text style={styles.feedbackText}>{feedback}</Text> : null}
+      <ImagePreviewModal onClose={() => setPreviewImageUri('')} uri={previewImageUri} />
     </View>
   );
 }
@@ -1529,13 +1668,18 @@ const styles = StyleSheet.create({
   },
   toggleCard: {
     alignItems: 'center',
-    backgroundColor: learnerPalette.softGreen,
+    backgroundColor: learnerPalette.surface,
     borderColor: learnerPalette.border,
     borderRadius: 22,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 12,
     padding: 14,
+  },
+  toggleCardActive: {
+    backgroundColor: '#F4FAF7',
+    borderColor: learnerPalette.primary,
+    borderWidth: 2,
   },
   toggleCopy: {
     flex: 1,
@@ -1560,6 +1704,9 @@ const styles = StyleSheet.create({
   },
   toggleStateBadgeOff: {
     backgroundColor: learnerPalette.surfaceMuted,
+  },
+  toggleStateBadgeActive: {
+    backgroundColor: '#FFFFFF',
   },
   toggleStateText: {
     color: learnerPalette.primary,
@@ -1589,6 +1736,30 @@ const styles = StyleSheet.create({
   },
   voiceConversationCard: {
     gap: 10,
+  },
+  sectionToggle: {
+    alignItems: 'center',
+    backgroundColor: learnerPalette.surface,
+    borderColor: learnerPalette.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 14,
+  },
+  sectionToggleCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  sectionToggleTitle: {
+    color: learnerPalette.dark,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 13,
+  },
+  sectionToggleText: {
+    color: learnerPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
   },
   formPreview: {
     gap: 9,
@@ -1686,6 +1857,11 @@ const styles = StyleSheet.create({
     minHeight: 48,
     padding: 10,
   },
+  attachmentThumbnail: {
+    borderRadius: 9,
+    height: 38,
+    width: 38,
+  },
   attachmentCopy: {
     flex: 1,
     gap: 1,
@@ -1727,19 +1903,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 13,
   },
   chatCard: {
-    backgroundColor: learnerPalette.surfaceMuted,
-    borderTopColor: learnerPalette.border,
-    borderTopWidth: 1,
-    elevation: 5,
+    backgroundColor: learnerPalette.surface,
+    borderColor: learnerPalette.border,
+    borderRadius: 22,
+    borderWidth: 1,
     gap: 14,
-    marginHorizontal: -30,
-    paddingBottom: 22,
-    paddingHorizontal: 32,
-    paddingTop: 18,
-    shadowColor: learnerPalette.dark,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
+    padding: 14,
   },
   conversationPanel: {
     backgroundColor: learnerPalette.surface,
@@ -1792,15 +1961,27 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
   conversationChip: {
+    alignItems: 'center',
     backgroundColor: learnerPalette.surfaceMuted,
     borderColor: learnerPalette.border,
     borderRadius: 13,
     borderWidth: 1,
-    gap: 1,
+    flexDirection: 'row',
     maxWidth: 176,
     minWidth: 126,
+    overflow: 'hidden',
+  },
+  conversationChipMain: {
+    flex: 1,
+    gap: 1,
     paddingHorizontal: 11,
     paddingVertical: 8,
+  },
+  deleteConversationButton: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
   },
   conversationChipActive: {
     backgroundColor: learnerPalette.primary,
@@ -1823,8 +2004,12 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   chatHeader: {
+    alignItems: 'center',
     borderBottomColor: learnerPalette.border,
     borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
     paddingBottom: 12,
   },
   chatTitle: {
@@ -1837,6 +2022,11 @@ const styles = StyleSheet.create({
     color: learnerPalette.textMuted,
     fontFamily: 'PoppinsRegular',
     fontSize: 12,
+  },
+  historyToggleText: {
+    color: learnerPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
   },
   messageList: {
     gap: 12,
@@ -1992,25 +2182,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
-  },
-  micButton: {
-    alignItems: 'center',
-    backgroundColor: learnerPalette.surfaceMuted,
-    borderColor: learnerPalette.border,
-    borderRadius: 25,
-    borderWidth: 2,
-    height: 50,
-    justifyContent: 'center',
-    shadowColor: learnerPalette.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    width: 50,
-    elevation: 5,
-  },
-  micButtonActive: {
-    backgroundColor: learnerPalette.primary,
-    borderColor: learnerPalette.primary,
   },
   sendButton: {
     alignItems: 'center',

@@ -73,14 +73,8 @@ async function uploadEvidence(evidencia, bitacoraId, index) {
         };
     }
 
-    const response = await fetch(source);
-
-    if (!response.ok) {
-        throw new Error(`No pudimos leer la evidencia ${nombre}. Intenta seleccionarla nuevamente.`);
-    }
-
     const { supabaseAnonKey, supabaseUrl } = getExternalFilesStorageConfig();
-    const blob = await response.blob();
+    const blob = await readLocalFileAsBlob(source, nombre);
     const path = `bitacoras/${bitacoraId}/${Date.now()}-${index}-${safeFileName(nombre)}`;
     const uploadUrl = `${supabaseUrl}/storage/v1/object/${EVIDENCE_FILES_BUCKET}/${path}`;
     const uploadResponse = await fetch(uploadUrl, {
@@ -115,6 +109,19 @@ async function uploadEvidence(evidencia, bitacoraId, index) {
         tipo,
         url: `${supabaseUrl}/storage/v1/object/public/${EVIDENCE_FILES_BUCKET}/${path}`,
     };
+}
+
+function readLocalFileAsBlob(uri, nombre) {
+    return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.onload = () => resolve(request.response);
+        request.onerror = () => reject(
+            new Error(`No pudimos leer la evidencia ${nombre}. Intenta seleccionarla nuevamente.`)
+        );
+        request.responseType = 'blob';
+        request.open('GET', uri, true);
+        request.send(null);
+    });
 }
 
 function mapSnapshot(snapshot) {
@@ -310,19 +317,6 @@ export async function revisarBitacora(bitacoraId, revision) {
 
 export async function observarBitacora(bitacoraId, revision) {
     await upsertObservation(bitacoraId, revision);
-    return;
-
-    if (!observacion) {
-        throw new Error('Registra una observación para el aprendiz.');
-    }
-
-    await updateDoc(doc(db, BITACORAS_COLLECTION, bitacoraId), {
-        observacion,
-        revisadoPorUid: revision.revisadoPorUid,
-        revisadoPorNombre: revision.revisadoPorNombre,
-        revisadoPorRol: revision.revisadoPorRol,
-        actualizadoEn: now(),
-    });
 }
 
 export async function eliminarObservacionBitacora(bitacoraId, observacionId) {

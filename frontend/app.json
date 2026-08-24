@@ -55,7 +55,7 @@
         {
           "photosPermission": "Permite que Biomind acceda a tu galeria para elegir tu foto de perfil.",
           "cameraPermission": "Permite que Biomind use tu camara para tomar una foto de perfil.",
-          "microphonePermission": false
+          "microphonePermission": "Permite que Biomind use el microfono para conversar con la inteligencia artificial."
         }
       ],
       [

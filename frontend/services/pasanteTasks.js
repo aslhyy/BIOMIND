@@ -70,14 +70,8 @@ async function uploadTaskAttachment(archivo, taskId, index) {
     };
   }
 
-  const response = await fetch(source);
-
-  if (!response.ok) {
-    throw new Error(`No pudimos leer el adjunto ${nombre}. Intenta seleccionarlo nuevamente.`);
-  }
-
   const { supabaseAnonKey, supabaseUrl } = getExternalFilesStorageConfig();
-  const blob = await response.blob();
+  const blob = await readLocalFileAsBlob(source, nombre);
   const path = `tareas-pasante/${taskId}/${Date.now()}-${index}-${safeFileName(nombre)}`;
   const uploadUrl = `${supabaseUrl}/storage/v1/object/${TASK_FILES_BUCKET}/${path}`;
   const uploadResponse = await fetch(uploadUrl, {
@@ -114,6 +108,19 @@ async function uploadTaskAttachment(archivo, taskId, index) {
     uri: url,
     url,
   };
+}
+
+function readLocalFileAsBlob(uri, nombre) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.onload = () => resolve(request.response);
+    request.onerror = () => reject(
+      new Error(`No pudimos leer el adjunto ${nombre}. Intenta seleccionarlo nuevamente.`)
+    );
+    request.responseType = 'blob';
+    request.open('GET', uri, true);
+    request.send(null);
+  });
 }
 
 function mapSnapshot(snapshot) {

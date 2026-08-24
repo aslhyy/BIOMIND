@@ -285,6 +285,13 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
   const [realFeedback, setRealFeedback] = useState('');
   const assignedFichas = Array.isArray(session.fichasAsignadas) ? session.fichasAsignadas : [];
   const assignedFichaSet = new Set(assignedFichas.map(String));
+  const loadedSheetAliases = new Set(realSheets.flatMap((sheet) =>
+    [sheet.id, sheet.numero].filter(Boolean).map(String)
+  ));
+  const assignedSheetsNotLoaded = new Set(
+    assignedFichas.map(String).filter((value) => !loadedSheetAliases.has(value))
+  );
+  const assignedSheetCount = realSheets.length + assignedSheetsNotLoaded.size;
   const assignedProjectsFromSession = assignedFichaSet.size
     ? pasanteProjects.filter((project) => assignedFichaSet.has(project.ficha))
     : [];
@@ -352,8 +359,8 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
     {
       id: 'fichas-reales',
       label: 'Fichas asignadas',
-      value: String(realSheets.length || assignedFichas.length),
-      caption: 'Grupos que acompañas',
+      value: String(assignedSheetCount),
+      caption: 'Propias y del instructor',
       icon: 'school-outline',
       accent: pasantePalette.primary,
       soft: pasantePalette.aquaSoft,

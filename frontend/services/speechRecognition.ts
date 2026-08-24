@@ -32,8 +32,20 @@ type NativeSpeechModule = {
   addListener: (eventName: string, listener: (event: any) => void) => { remove: () => void };
   isRecognitionAvailable: () => boolean;
   requestPermissionsAsync: () => Promise<{ granted: boolean }>;
+  setAudioSessionActiveIOS?: (active: boolean, options?: { notifyOthersOnDeactivation: boolean }) => void;
+  setCategoryIOS?: (options: {
+    category: 'playAndRecord';
+    categoryOptions: ('defaultToSpeaker' | 'allowBluetooth')[];
+    mode: 'default' | 'measurement';
+  }) => void;
   start: (options: Record<string, unknown>) => void;
   stop: () => void;
+};
+
+const HANDS_FREE_IOS_CATEGORY = {
+  category: 'playAndRecord' as const,
+  categoryOptions: ['defaultToSpeaker', 'allowBluetooth'] as ('defaultToSpeaker' | 'allowBluetooth')[],
+  mode: 'default' as const,
 };
 
 type SpeechSessionOptions = {
@@ -86,6 +98,17 @@ export function isSpeechRecognitionSupported() {
   }
 
   return isWebSpeechRecognitionSupported();
+}
+
+/** Keeps voice replies on the loudspeaker while preserving microphone access on iOS. */
+export function configureHandsFreeAudioSession() {
+  if (Platform.OS !== 'ios') {
+    return;
+  }
+
+  const nativeSpeech = getNativeSpeechModule();
+  nativeSpeech?.setCategoryIOS?.(HANDS_FREE_IOS_CATEGORY);
+  nativeSpeech?.setAudioSessionActiveIOS?.(true, { notifyOthersOnDeactivation: false });
 }
 
 export async function requestSpeechRecognitionPermissions(): Promise<SpeechPermissionResult> {
@@ -189,6 +212,7 @@ function createNativeSpeechRecognitionSession({
   }
 
   let cleanedUp = false;
+  let stopped = false;
   let subscriptions: { remove: () => void }[] = [];
   const cleanup = () => {
     if (cleanedUp) {
@@ -208,7 +232,6 @@ function createNativeSpeechRecognitionSession({
       cleanup();
     }),
     nativeSpeech.addListener('error', (event) => {
-      onEnd?.();
       onError?.(event?.message || 'No pudimos procesar el dictado por voz.');
       cleanup();
     }),
@@ -227,14 +250,20 @@ function createNativeSpeechRecognitionSession({
         return;
       }
 
+      if (stopped) {
+        return;
+      }
+
       nativeSpeech.start({
         addsPunctuation: true,
         continuous: true,
         interimResults: true,
         lang: language,
+        iosCategory: HANDS_FREE_IOS_CATEGORY,
       });
     },
     stop: () => {
+      stopped = true;
       nativeSpeech.stop();
       cleanup();
     },
