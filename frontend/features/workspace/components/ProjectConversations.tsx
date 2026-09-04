@@ -29,6 +29,8 @@ type Project = {
 type Group = {
   id: string;
   nombre?: string;
+  activo?: boolean;
+  estado?: string;
   fichaId?: string;
   fichaNumero?: string;
   aprendizIds?: string[];
@@ -125,10 +127,12 @@ const defaultTone: Tone = {
 
 export function ProjectConversations({
   legacyHeader = false,
+  preferredConversationId,
   session,
   tone = defaultTone,
 }: {
   legacyHeader?: boolean;
+  preferredConversationId?: string;
   session: AuthenticatedSession;
   tone: Tone;
 }) {
@@ -250,6 +254,23 @@ export function ProjectConversations({
       setSelectedTargetId('');
     }
   }, [mode, modeOptions]);
+
+  useEffect(() => {
+    if (!preferredConversationId || !summaries.length) return;
+    const summary = summaries.find((item) => item.id === preferredConversationId) as (Summary & {
+      fichaId?: string;
+      fichaNumero?: string;
+      proyectoId?: string;
+    }) | undefined;
+    if (!summary) return;
+    if (preferredConversationId.startsWith('grupo-')) setMode('grupo');
+    else if (preferredConversationId.startsWith('ficha-')) setMode('ficha');
+    else if (preferredConversationId.startsWith('aprendiz-instructor-')) setMode(normalizedRole === 'aprendiz' ? 'instructor' : 'aprendiz');
+    else if (preferredConversationId.startsWith('pasante-instructor-')) setMode(normalizedRole === 'pasante' ? 'instructor' : 'pasante');
+    setSelectedSheetKey(summary.fichaId || summary.fichaNumero || '');
+    setSelectedProjectId(summary.proyectoId || '');
+    setSelectedTargetId(preferredConversationId);
+  }, [normalizedRole, preferredConversationId, summaries]);
 
   const sheets = useMemo(() => {
     const sheetMap = new Map<string, { key: string; label: string; subtitle: string }>();
@@ -381,6 +402,7 @@ export function ProjectConversations({
             participanteUids: [
               ...(selectedProjectGroup.aprendizIds || []),
               selectedProject.instructorUid,
+              ...pasantes.map((pasante) => pasante.id),
             ].filter((uid): uid is string => Boolean(uid)),
             preview: `${selectedProjectGroup.nombre || 'Grupo'} · ${selectedProject.titulo || 'Proyecto seleccionado'}`,
           }];
@@ -463,24 +485,29 @@ export function ProjectConversations({
     }
 
     if (mode === 'grupo') {
-      const groupIds = new Set(projectsForTarget.map((project) => project.grupoId).filter(Boolean));
+      const selectedGroupId = selectedProject?.grupoId;
       return groups
-        .filter((group) => groupIds.has(group.id))
+        .filter((group) => group.activo !== false && group.estado !== 'Inactivo')
+        .filter((group) =>
+          selectedSheetKeys.includes(String(group.fichaId || ''))
+          || selectedSheetKeys.includes(String(group.fichaNumero || ''))
+        )
+        .filter((group) => !selectedGroupId || group.id === selectedGroupId)
         .filter((group) =>
           normalizedRole !== 'aprendiz'
-          || ((group.aprendizIds || []).includes(session.uid)
-            && (String(group.fichaId || group.fichaNumero || '') === selectedSheetKey))
+          || (group.aprendizIds || []).includes(session.uid)
         )
         .map((group) => ({
           id: `grupo-${group.id}${projectSuffix}`,
           titulo: group.nombre || 'Grupo sin nombre',
           fichaId: group.fichaId,
           fichaNumero: group.fichaNumero,
-          instructorUid: selectedProject?.instructorUid || session.instructorUid || session.uid || group.instructorUid,
+          instructorUid: group.instructorUid || selectedProject?.instructorUid || session.instructorUid || session.uid,
           grupoId: group.id,
           participanteUids: [
             ...(group.aprendizIds || []),
-            selectedProject?.instructorUid || session.instructorUid || session.uid || group.instructorUid,
+            group.instructorUid || selectedProject?.instructorUid || session.instructorUid || session.uid,
+            ...pasantes.map((pasante) => pasante.id),
           ].filter((uid): uid is string => Boolean(uid)),
           preview: selectedProject ? selectedProject.titulo || 'Proyecto seleccionado' : `${group.aprendizIds?.length || 0} integrantes`,
         }));
@@ -517,7 +544,7 @@ export function ProjectConversations({
         fichaId: learner.fichaId || undefined,
         preview: selectedProject ? selectedProject.titulo || 'Proyecto seleccionado' : 'Chat aprendiz, instructor y pasante',
       }));
-  }, [allSheetProjects, groups, instructors, learners, mode, normalizedRole, pasantes, projectsForTarget, selectedProject, selectedSheetKey, session.instructorUid, session.uid, sheets, sheetProjects]);
+  }, [allSheetProjects, groups, instructors, learners, mode, normalizedRole, pasantes, projectsForTarget, selectedProject, selectedSheetKey, selectedSheetKeys, session.instructorUid, session.uid, sheets, sheetProjects]);
 
   const usesPersonFirstFlow =
     (normalizedRole === 'pasante' && mode === 'instructor')
@@ -555,9 +582,9 @@ export function ProjectConversations({
 
   useEffect(() => {
     if (!filteredTargets.some((target) => target.id === selectedTargetId)) {
-      setSelectedTargetId(filteredTargets[0]?.id || '');
+      setSelectedTargetId(filteredTargets.some((target) => target.id === preferredConversationId) ? preferredConversationId || '' : filteredTargets[0]?.id || '');
     }
-  }, [filteredTargets, selectedTargetId]);
+  }, [filteredTargets, preferredConversationId, selectedTargetId]);
 
   const selectedTarget = filteredTargets.find((target) => target.id === selectedTargetId);
   const projectOptions = useMemo(() => {
@@ -803,13 +830,20 @@ export function ProjectConversations({
                 const outOfSheet = isLearnerMessageFromPreviousSheet(message, learnerById);
                 const sender = message.remitenteUid ? userById.get(message.remitenteUid) : undefined;
                 const senderName = sender?.nombre || sender?.correo || message.remitenteNombre || 'Usuario';
+                const liveGroup = selectedTarget.grupoId ? groups.find((group) => group.id === selectedTarget.grupoId) : undefined;
+                const removedGroupMember = Boolean(
+                  liveGroup
+                  && String(message.remitenteRol || '').toLowerCase() === 'aprendiz'
+                  && message.remitenteUid
+                  && !(liveGroup.aprendizIds || []).includes(message.remitenteUid)
+                );
                 return (
                   <View key={message.id} style={[styles.messageRow, own ? styles.ownMessageRow : styles.incomingMessageRow]}>
                     {!own ? <MessageAvatar name={senderName} photoUrl={sender?.photoUrl || null} tone={tone} /> : null}
                     <View style={[styles.messageBubble, own ? styles.ownMessage : styles.incomingMessage, isSpecialMessage(message) && styles.specialMessage, { backgroundColor: getMessageBackground(message, own, tone) }]}>
                       {!own ? (
-                        <Text style={[styles.sender, { color: outOfSheet ? '#C45C43' : tone.accent }]}>
-                          {message.remitenteNombre || 'Usuario'} · {message.remitenteRol || 'Equipo'}{outOfSheet ? ' · No pertenece a esta ficha' : ''}
+                        <Text style={[styles.sender, { color: outOfSheet || removedGroupMember ? '#C45C43' : tone.accent }]}>
+                          {message.remitenteNombre || 'Usuario'} · {message.remitenteRol || 'Equipo'}{removedGroupMember ? ' · Ya no pertenece al grupo' : outOfSheet ? ' · No pertenece a esta ficha' : ''}
                         </Text>
                       ) : null}
                       {isSpecialMessage(message) ? (

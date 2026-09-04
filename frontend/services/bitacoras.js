@@ -232,13 +232,14 @@ export function escucharBitacorasPorProyecto(proyectoId, onData, onError) {
 }
 
 export async function guardarBitacora(bitacora) {
+    const nombre = cleanText(bitacora.nombre);
     const descripcion = cleanText(bitacora.descripcion);
     const fecha = cleanText(bitacora.fecha);
     const avance = cleanText(bitacora.avance);
     const dificultades = cleanText(bitacora.dificultades);
 
-    if (!descripcion || !fecha || !avance) {
-        throw new Error('Completa descripción, fecha y avance realizado.');
+    if (!nombre || !descripcion || !fecha || !avance) {
+        throw new Error('Completa nombre, descripción, fecha y avance realizado.');
     }
 
     const bitacoraRef = bitacora.id
@@ -257,6 +258,7 @@ export async function guardarBitacora(bitacora) {
     }
 
     const learnerPayload = {
+        nombre,
         aprendizUid: bitacora.aprendizUid,
         aprendizNombre: bitacora.aprendizNombre,
         proyectoId: bitacora.proyectoId,

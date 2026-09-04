@@ -199,7 +199,8 @@ function buildRecentBitacoraSummaries(bitacoras: RecordItem[]) {
   );
 
   return listLines(sorted, (bitacora) => [
-    `- ${cleanText(bitacora.proyectoTitulo || bitacora.proyectoId) || 'Proyecto sin titulo'}`,
+    `- Bitacora ${cleanText(bitacora.nombre) || 'sin nombre'}`,
+    `proyecto ${cleanText(bitacora.proyectoTitulo || bitacora.proyectoId) || 'sin proyecto'}`,
     `aprendiz ${cleanText(bitacora.aprendizNombre || bitacora.aprendizUid) || 'sin aprendiz'}`,
     `estado ${cleanText(bitacora.estado) || 'Pendiente'}`,
     `fecha ${cleanText(bitacora.fecha) || 'sin fecha'}`,

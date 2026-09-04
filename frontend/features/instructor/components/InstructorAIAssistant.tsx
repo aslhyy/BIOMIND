@@ -133,6 +133,8 @@ export function InstructorAIAssistant({ chatChannel = 'ai', session, voiceEnable
     () => [
       'Eres BIOMIND IA para instructores de biotecnologia vegetal.',
       'Ayudas a responder dudas tecnicas, revisar proyectos, resumir fichas, analizar aprendices y pasantes, y generar informes academicos con informacion real de la app.',
+      'Prioriza pendientes, patrones de dificultades y acciones concretas. Al redactar una observación, entrega un borrador que el instructor deba revisar.',
+      'No confirmes cambios, validaciones o eliminaciones que no hayan sido ejecutados por la interfaz.',
       buildAcademicAssistantContext({
         asignaciones,
         aprendices,

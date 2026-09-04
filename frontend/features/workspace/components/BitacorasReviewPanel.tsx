@@ -25,6 +25,7 @@ type Observation = {
 
 type Bitacora = {
   id: string;
+  nombre?: string;
   aprendizUid?: string;
   aprendizNombre?: string;
   proyectoId?: string;
@@ -245,10 +246,13 @@ export function BitacorasReviewPanel({ bitacoras, groupMemberNames = [], isGroup
 
         <View style={styles.detailHeader}>
           <View style={styles.detailCopy}>
-            <Text style={styles.detailTitle}>{selectedBitacora.proyectoTitulo || 'Bitácora del proyecto'}</Text>
+            <Text style={styles.detailTitle}>{selectedBitacora.nombre || 'Bitácora sin nombre'}</Text>
             <Text style={styles.detailMeta}>
               {isGroupProject ? `Grupo: ${formatGroupMembers(groupMemberNames)}` : selectedBitacora.aprendizNombre || 'Aprendiz'} · {selectedBitacora.fecha || 'Sin fecha'}
             </Text>
+            {selectedBitacora.proyectoTitulo ? (
+              <Text style={styles.detailMeta}>Proyecto: {selectedBitacora.proyectoTitulo}</Text>
+            ) : null}
             {isGroupProject ? (
               <Text style={styles.detailMeta}>
                 Publicada por {selectedBitacora.aprendizNombre || 'integrante del grupo'}
@@ -397,9 +401,12 @@ export function BitacorasReviewPanel({ bitacoras, groupMemberNames = [], isGroup
               </View>
               <View style={styles.cardCopy}>
                 <Text style={styles.cardTitle}>
-                  {isGroupProject ? 'Bitácora grupal' : bitacora.aprendizNombre || 'Aprendiz'}
+                  {bitacora.nombre || 'Bitácora sin nombre'}
                 </Text>
                 <Text style={styles.cardMeta}>{bitacora.fecha || 'Sin fecha'}</Text>
+                {!isGroupProject ? (
+                  <Text style={styles.cardMeta}>Aprendiz: {bitacora.aprendizNombre || 'Sin nombre'}</Text>
+                ) : null}
                 {isGroupProject ? (
                   <>
                     <Text style={styles.cardMeta}>Publicada por {bitacora.aprendizNombre || 'integrante del grupo'}</Text>

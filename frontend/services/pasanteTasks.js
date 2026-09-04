@@ -2,6 +2,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   query,
   setDoc,
@@ -141,6 +142,16 @@ function sortByCreation(items) {
   return [...items].sort((a, b) => getMillis(b.creadoEn) - getMillis(a.creadoEn));
 }
 
+function buildObservation(authorRole, authorName, text) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    autorNombre: cleanText(authorName),
+    autorRol: authorRole,
+    texto: cleanText(text),
+    creadoEn: now(),
+  };
+}
+
 export function escucharTareasPasantePorInstructor(instructorUid, onData, onError) {
   if (!instructorUid) {
     onData([]);
@@ -203,6 +214,7 @@ export async function guardarTareaPasante(task) {
     instructorNombre: cleanText(task.instructorNombre),
     observacionInstructor: cleanText(task.observacionInstructor),
     observacionPasante: cleanText(task.observacionPasante),
+    ...(Array.isArray(task.observaciones) ? { observaciones: task.observaciones } : {}),
     actualizadoEn: now(),
   };
 
@@ -213,6 +225,7 @@ export async function guardarTareaPasante(task) {
 
   await setDoc(taskRef, {
     ...payload,
+    observaciones: [],
     estado: 'Pendiente',
     validadaPorInstructor: false,
     creadoEn: now(),
@@ -231,18 +244,67 @@ export async function actualizarTareaPasante(id, updates) {
 }
 
 export async function marcarTareaPasanteHecha(id, observacionPasante = '') {
+  await guardarEntregaTareaPasante(id, { observacionPasante, estado: 'Hecho' });
+}
+
+export async function guardarEntregaTareaPasante(id, { observacionPasante = '', archivos = [], estado = 'Hecho', pasanteNombre = '' } = {}) {
+  if (!id) throw new Error('Selecciona una tarea válida.');
+  const taskRef = doc(db, TASKS_COLLECTION, id);
+  const snapshot = await getDoc(taskRef);
+  const current = snapshot.data() || {};
+  const uploadedFiles = (await Promise.all(
+    (Array.isArray(archivos) ? archivos : []).map((archivo, index) => uploadTaskAttachment(archivo, id, index))
+  )).filter(Boolean);
+  const text = cleanText(observacionPasante);
+  const observations = Array.isArray(current.observaciones) ? current.observaciones : [];
+  const last = observations[observations.length - 1];
+  const nextObservations = text && (last?.texto !== text || last?.autorRol !== 'Pasante')
+    ? [...observations, buildObservation('Pasante', pasanteNombre || current.pasanteNombre, text)]
+    : observations;
   await actualizarTareaPasante(id, {
-    estado: 'Hecho',
+    estado,
     validadaPorInstructor: false,
-    observacionPasante: cleanText(observacionPasante),
+    observacionPasante: text || cleanText(current.observacionPasante),
+    observaciones: nextObservations,
+    archivosPasante: [
+      ...(Array.isArray(current.archivosPasante) ? current.archivosPasante : []),
+      ...uploadedFiles,
+    ],
+  });
+}
+
+export async function guardarObservacionPasanteTarea(id, observacionPasante, pasanteNombre = '') {
+  if (!id) throw new Error('Selecciona una tarea válida.');
+  const taskRef = doc(db, TASKS_COLLECTION, id);
+  const snapshot = await getDoc(taskRef);
+  const current = snapshot.data() || {};
+  const text = cleanText(observacionPasante);
+  if (!text) throw new Error('Escribe una observación antes de enviarla.');
+  const observations = Array.isArray(current.observaciones) ? current.observaciones : [];
+  await actualizarTareaPasante(id, {
+    observacionPasante: text,
+    observaciones: [...observations, buildObservation('Pasante', pasanteNombre || current.pasanteNombre, text)],
   });
 }
 
 export async function marcarTareaPasantePendiente(id, observacionPasante = '') {
+  await guardarEntregaTareaPasante(id, { observacionPasante, estado: 'Pendiente' });
+}
+
+export async function guardarObservacionInstructorTarea(id, observacionInstructor, instructorNombre = '') {
+  if (!id) throw new Error('Selecciona una tarea válida.');
+  const taskRef = doc(db, TASKS_COLLECTION, id);
+  const snapshot = await getDoc(taskRef);
+  const current = snapshot.data() || {};
+  const text = cleanText(observacionInstructor);
+  const observations = Array.isArray(current.observaciones) ? current.observaciones : [];
+  const last = observations[observations.length - 1];
+  const nextObservations = text && (last?.texto !== text || last?.autorRol !== 'Instructor')
+    ? [...observations, buildObservation('Instructor', instructorNombre || current.instructorNombre, text)]
+    : observations;
   await actualizarTareaPasante(id, {
-    estado: 'Pendiente',
-    validadaPorInstructor: false,
-    observacionPasante: cleanText(observacionPasante),
+    observacionInstructor: text,
+    observaciones: nextObservations,
   });
 }
 

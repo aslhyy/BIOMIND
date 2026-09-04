@@ -20,6 +20,9 @@ export type VoiceConversationStatus =
 
 type UseVoiceConversationOptions = {
   canStart?: boolean;
+  confirmBeforeSend?: boolean;
+  continuous?: boolean;
+  contextualStrings?: string[];
   language?: string;
   onSendMessage: (text: string) => Promise<string | void>;
   silenceMs?: number;
@@ -28,6 +31,7 @@ type UseVoiceConversationOptions = {
 
 const DEFAULT_SILENCE_MS = 1500;
 const RESTART_DELAY_MS = 450;
+const DUPLICATE_WINDOW_MS = 6500;
 
 type VoiceInputPhase = 'dictating' | 'confirming' | 'correcting';
 
@@ -54,6 +58,9 @@ function getConfirmationIntent(value: string): 'yes' | 'no' | 'unknown' {
 
 export function useVoiceConversation({
   canStart = true,
+  confirmBeforeSend = true,
+  continuous = true,
+  contextualStrings = [],
   language = 'es-CO',
   onSendMessage,
   silenceMs = DEFAULT_SILENCE_MS,
@@ -69,6 +76,7 @@ export function useVoiceConversation({
   const activeRef = useRef(false);
   const canStartRef = useRef(canStart);
   const lastSentTranscriptRef = useRef('');
+  const lastSentAtRef = useRef(0);
   const latestTranscriptRef = useRef('');
   const listeningRef = useRef(false);
   const speakingRef = useRef(false);
@@ -145,15 +153,18 @@ export function useVoiceConversation({
     clearSilenceTimer();
     clearRestartTimer();
     latestTranscriptRef.current = '';
-    lastSentTranscriptRef.current = '';
     setPartialTranscript('');
     setError('');
     void stopTextToSpeech();
 
     const session = createSpeechRecognitionSession({
+      contextualStrings,
       language,
       onEnd: () => {
+        const wasListening = listeningRef.current;
         listeningRef.current = false;
+
+        if (wasListening) void playVoiceCue('close');
 
         if (activeRef.current && !sendInProgressRef.current) {
           scheduleListeningRestart();
@@ -163,6 +174,7 @@ export function useVoiceConversation({
         listeningRef.current = false;
         setStatus('error');
         setError(message);
+        void playVoiceCue('error');
 
         // Native recognizers can end on silence or transient interruptions. The
         // hands-free mode remains active and receives a fresh session.
@@ -202,6 +214,7 @@ export function useVoiceConversation({
       onStart: () => {
         listeningRef.current = true;
         setStatus('listening');
+        void playVoiceCue('open');
       },
     });
 
@@ -212,12 +225,8 @@ export function useVoiceConversation({
     }
 
     sessionRef.current = session;
-    void playVoiceCue('open').then(() => {
-      if (activeRef.current && sessionRef.current === session) {
-        return Promise.resolve(session.start());
-      }
-    });
-  }, [clearRestartTimer, clearSilenceTimer, language, scheduleListeningRestart, silenceMs]);
+    void Promise.resolve(session.start());
+  }, [clearRestartTimer, clearSilenceTimer, contextualStrings, language, scheduleListeningRestart, silenceMs]);
 
   useEffect(() => {
     startListeningRef.current = startListening;
@@ -234,12 +243,18 @@ export function useVoiceConversation({
       return;
     }
 
-    if (cleanText === lastSentTranscriptRef.current) {
+    const normalizedTranscript = normalizeConfirmation(cleanText);
+    const normalizedPrevious = normalizeConfirmation(lastSentTranscriptRef.current);
+    const isRecentDuplicate = Date.now() - lastSentAtRef.current < DUPLICATE_WINDOW_MS
+      && Boolean(normalizedPrevious)
+      && normalizedTranscript === normalizedPrevious;
+    if (isRecentDuplicate) {
       return;
     }
 
     sendInProgressRef.current = true;
     lastSentTranscriptRef.current = cleanText;
+    lastSentAtRef.current = Date.now();
     clearSilenceTimer();
     stopListening();
     await playVoiceCue('close');
@@ -248,6 +263,7 @@ export function useVoiceConversation({
     setStatus('processing');
 
     let shouldResumeListening = false;
+    let failed = false;
 
     try {
       if (inputPhaseRef.current === 'confirming') {
@@ -289,11 +305,25 @@ export function useVoiceConversation({
             await speakText(responseText, { language, rate: 0.95 });
           }
         }
-        shouldResumeListening = activeRef.current;
+        shouldResumeListening = continuous && activeRef.current;
         return;
       }
 
-      // A dictated or corrected message is always repeated before it can be sent.
+      if (!confirmBeforeSend) {
+        inputPhaseRef.current = 'dictating';
+        setStatus('waiting-ai');
+        const responseText = cleanTranscript(String(await onSendMessageRef.current(cleanText) || ''));
+        if (!activeRef.current) return;
+        if (responseText && speechEnabledRef.current) {
+          setStatus('speaking');
+          speakingRef.current = true;
+          await speakText(responseText, { language, rate: 1.02 });
+        }
+        shouldResumeListening = continuous && activeRef.current;
+        return;
+      }
+
+      // Optional confirmation remains available outside Manos Libres.
       stopListening();
       pendingConfirmationRef.current = cleanText;
       inputPhaseRef.current = 'confirming';
@@ -307,10 +337,15 @@ export function useVoiceConversation({
       shouldResumeListening = activeRef.current;
       return;
     } catch (nextError) {
+      failed = true;
       const typedError = nextError as { message?: string };
       setStatus('error');
       setError(typedError?.message || 'Ocurrio un error durante la conversacion por voz.');
-      shouldResumeListening = activeRef.current;
+      shouldResumeListening = continuous && activeRef.current;
+      if (!continuous) {
+        activeRef.current = false;
+        setIsConversationActive(false);
+      }
     } finally {
       speakingRef.current = false;
       sendInProgressRef.current = false;
@@ -319,15 +354,19 @@ export function useVoiceConversation({
       // could fire while this flag was still true and the loop stopped forever.
       if (shouldResumeListening && activeRef.current) {
         restartListeningAfterSpeech();
+      } else if (!failed && !continuous && inputPhaseRef.current === 'dictating') {
+        activeRef.current = false;
+        setIsConversationActive(false);
+        setStatus('idle');
       }
     }
-  }, [clearSilenceTimer, language, restartListeningAfterSpeech, stopListening]);
+  }, [clearSilenceTimer, confirmBeforeSend, continuous, language, restartListeningAfterSpeech, stopListening]);
 
   useEffect(() => {
     finishTranscriptRef.current = finishTranscript;
   }, [finishTranscript]);
 
-  const startConversation = useCallback(async () => {
+  const startConversation = useCallback(async (openingMessage = '') => {
     if (!canStartRef.current) {
       setStatus('error');
       setError('Selecciona un proyecto antes de iniciar la conversacion.');
@@ -353,8 +392,16 @@ export function useVoiceConversation({
       return;
     }
 
+    if (openingMessage.trim()) {
+      setStatus('speaking');
+      speakingRef.current = true;
+      await speakText(openingMessage, { language, rate: 0.98 });
+      speakingRef.current = false;
+      if (!activeRef.current) return;
+    }
+
     startListeningRef.current();
-  }, []);
+  }, [language]);
 
   const stopConversation = useCallback(() => {
     activeRef.current = false;

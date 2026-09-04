@@ -76,9 +76,11 @@ async function requestGeminiModel({
   model,
   systemInstruction,
 }: GeminiReplyParams & { model: string }) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -89,9 +91,18 @@ async function requestGeminiModel({
           parts: [{ text: systemInstruction }],
         },
         contents: normalizeGeminiHistory(history),
-      }),
-    }
-  );
+        generationConfig: {
+          temperature: 0.35,
+          topP: 0.85,
+          maxOutputTokens: 700,
+        },
+        }),
+      }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Fallo temporal de conexión con Gemini.';
+    throw createGeminiError('gemini/model-overloaded', message);
+  }
 
   const payload = await response.json().catch(() => null);
   const message =

@@ -1,10 +1,13 @@
 ﻿import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   asignarAprendizAFicha,
   cambiarEstadoProyecto,
+  eliminarGrupoTrabajo,
+  eliminarProyectoAcademico,
   escucharContextoAcademicoUsuario,
   escucharGruposTrabajo,
   escucharProyectos,
@@ -18,14 +21,15 @@ import type { AuthenticatedSession } from '@/features/workspace/types';
 import { instructorPalette } from '../theme';
 import { IconLabel, ProgressBar, SectionHeading, StatusBadge } from './InstructorUI';
 import { BitacorasReviewPanel } from '@/features/workspace/components/BitacorasReviewPanel';
+import { ImagePreviewModal } from '@/features/workspace/components/ImagePreviewModal';
 // @ts-ignore
 import { escucharBitacoras } from '@/services/bitacoras';
 // @ts-ignore
 import {
-  actualizarTareaPasante,
   eliminarTareaPasante,
   escucharTareasPasantePorInstructor,
   guardarTareaPasante,
+  guardarObservacionInstructorTarea,
   validarTareaPasante,
 } from '@/services/pasanteTasks';
 
@@ -152,6 +156,8 @@ type PasanteTaskRecord = {
   titulo?: string;
   descripcion?: string;
   archivos?: ProjectAttachment[];
+  archivosPasante?: ProjectAttachment[];
+  observaciones?: TaskObservation[];
   fichaId?: string;
   fichaNumero?: string;
   proyectoId?: string;
@@ -166,7 +172,16 @@ type PasanteTaskRecord = {
   validadaPorInstructor?: boolean;
 };
 
+type TaskObservation = { id?: string; autorNombre?: string; autorRol?: string; texto?: string; creadoEn?: any };
+
 type ProjectState = 'Pendiente' | 'En proceso' | 'Aprobado' | 'Desaprobado';
+
+function getMillis(value: any) {
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
 
 type ProjectForm = {
   id: string;
@@ -227,7 +242,7 @@ const emptyTaskForm = {
   observacionInstructor: '',
 };
 
-export function InstructorProjectsTab({ session }: { session: AuthenticatedSession }) {
+export function InstructorProjectsTab({ focus, session }: { focus?: { projectId?: string; bitacoraId?: string }; session: AuthenticatedSession }) {
   const [sheets, setSheets] = useState<AcademicSheet[]>([]);
   const [learners, setLearners] = useState<AcademicUser[]>([]);
   const [sheetRequests, setSheetRequests] = useState<AcademicUser[]>([]);
@@ -314,7 +329,6 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
     setSelectedListSheetId((current) => current || sheets[0]?.id || '');
     setTaskForm((current) => ({
       ...current,
-      fichaId: current.fichaId || sheets[0]?.id || '',
       pasanteUid: current.pasanteUid || pasantes[0]?.id || '',
     }));
   }, [pasantes, sheets]);
@@ -418,12 +432,18 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
       return new Set<string>();
     }
 
-    return new Set(
+    const learnerIds = new Set(
       selectedTrackingProject.asignacionTipo === 'grupo'
         ? selectedProjectGroup?.aprendizIds || []
         : selectedTrackingProject.aprendizIds || []
     );
-  }, [selectedProjectGroup?.aprendizIds, selectedTrackingProject]);
+    bitacoras
+      .filter((bitacora) => bitacora.proyectoId === selectedTrackingProject.id)
+      .forEach((bitacora) => {
+        if (bitacora.aprendizUid) learnerIds.add(bitacora.aprendizUid);
+      });
+    return learnerIds;
+  }, [bitacoras, selectedProjectGroup?.aprendizIds, selectedTrackingProject]);
   const trackingLearners = useMemo(
     () => learners.filter((learner) =>
       learnerIdsForSelectedProject.has(learner.id)
@@ -435,17 +455,12 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
     () => trackingLearners.map((learner) => learner.nombre || learner.correo || 'Integrante'),
     [trackingLearners]
   );
-  const activeTrackingLearnerIds = useMemo(
-    () => new Set(trackingLearners.map((learner) => learner.id)),
-    [trackingLearners]
-  );
   const allProjectBitacoras = useMemo(
     () => selectedTrackingProject ? bitacoras.filter((bitacora) =>
       bitacora.proyectoId === selectedTrackingProject.id
-      && (!selectedTrackingProject.fichaId || bitacora.fichaId === selectedTrackingProject.fichaId)
-      && Boolean(bitacora.aprendizUid && activeTrackingLearnerIds.has(bitacora.aprendizUid))
+      && (!selectedTrackingProject.fichaId || !bitacora.fichaId || bitacora.fichaId === selectedTrackingProject.fichaId)
     ) : [],
-    [activeTrackingLearnerIds, bitacoras, selectedTrackingProject?.fichaId, selectedTrackingProject?.id]
+    [bitacoras, selectedTrackingProject?.fichaId, selectedTrackingProject?.id]
   );
   const projectBitacoras = useMemo(
     () => allProjectBitacoras.filter((bitacora) =>
@@ -507,6 +522,16 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
     }
     setSelectedLearnerId('');
   }, [filteredProjects, selectedListSheetId, selectedProjectId]);
+
+  useEffect(() => {
+    if (!focus?.projectId || !projects.length) return;
+    const project = projects.find((item) => item.id === focus.projectId);
+    if (!project) return;
+    setSelectedListSheetId(project.fichaId || '');
+    setSelectedProjectId(project.id);
+    setActiveSection('ver-proyectos');
+    setProjectFormOpen(false);
+  }, [focus?.bitacoraId, focus?.projectId, projects]);
 
   const runAction = async (action: () => Promise<void>, successMessage: string) => {
     setSaving(true);
@@ -743,9 +768,23 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
     );
   };
 
+  const confirmDeleteProject = (project: AcademicProject) => {
+    Alert.alert('Eliminar proyecto', `¿Seguro que deseas eliminar "${project.titulo || 'este proyecto'}"?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => runAction(() => eliminarProyectoAcademico(project.id), 'Proyecto eliminado.') },
+    ]);
+  };
+
+  const confirmDeleteGroup = (group: WorkGroup) => {
+    Alert.alert('Eliminar grupo', `¿Seguro que deseas eliminar "${group.nombre || 'este grupo'}"? Los proyectos vinculados dejarán de estar activos.`, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => runAction(() => eliminarGrupoTrabajo(group.id), 'Grupo eliminado.') },
+    ]);
+  };
+
   const saveTaskObservation = (task: PasanteTaskRecord, observacionInstructor: string) =>
     runAction(
-      () => actualizarTareaPasante(task.id, { observacionInstructor }),
+      () => guardarObservacionInstructorTarea(task.id, observacionInstructor, session.name),
       'Observación de la tarea guardada.'
     );
 
@@ -1009,6 +1048,7 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
                 key={`${group.id}-${group.fichaId || 'sin-ficha'}-${index}`}
                 learners={learners}
                 onEdit={() => editGroup(group)}
+                onDelete={() => confirmDeleteGroup(group)}
                 onRemoveLearner={(learnerId) => removeLearnerFromGroup(group.id, learnerId)}
               />
             )) : <EmptyCard text="Aún no hay grupos creados para esta ficha." />}
@@ -1046,6 +1086,7 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
             project={{ ...project, estado: selectedSheetAutomaticState }}
             selected={project.id === selectedProject?.id}
             onEdit={() => editProject(project)}
+            onDelete={() => confirmDeleteProject(project)}
             onOpenFile={(file) => openProjectFile(file)}
             onSelect={() => setSelectedProjectId(project.id)}
           />
@@ -1104,6 +1145,7 @@ export function InstructorProjectsTab({ session }: { session: AuthenticatedSessi
             key={`${group.id}-${group.fichaId || 'sin-ficha'}-${index}`}
             learners={learners}
             onEdit={() => editGroup(group)}
+            onDelete={() => confirmDeleteGroup(group)}
             onRemoveLearner={(learnerId) => removeLearnerFromGroup(group.id, learnerId)}
           />
         )) : <EmptyCard text="Aún no hay grupos creados para esta ficha." />}
@@ -1388,7 +1430,7 @@ function PasanteTaskManager({
   onDelete: (task: PasanteTaskRecord) => void;
   onEdit: (task: PasanteTaskRecord) => void;
   onSave: () => void;
-  onSaveObservation: (task: PasanteTaskRecord, observacionInstructor: string) => void;
+  onSaveObservation: (task: PasanteTaskRecord, observacionInstructor: string) => Promise<void>;
   onValidate: (task: PasanteTaskRecord) => void;
   pasantes: AcademicUser[];
   projects: AcademicProject[];
@@ -1432,6 +1474,20 @@ function PasanteTaskManager({
     });
   };
 
+  const pickTaskPhotos = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.9 });
+    if (result.canceled) return;
+    const photos = result.assets.filter((asset) => asset.uri).map((asset, index) => ({
+      nombre: asset.fileName || `foto-${Date.now()}-${index + 1}.jpg`,
+      uri: asset.uri,
+      url: asset.uri,
+      mimeType: asset.mimeType || 'image/jpeg',
+    }));
+    onChange({ ...form, archivos: [...form.archivos, ...photos] });
+  };
+
   const removeTaskAttachment = (indexToRemove: number) => {
     onChange({
       ...form,
@@ -1455,7 +1511,10 @@ function PasanteTaskManager({
           <OptionPicker
             emptyLabel="Primero necesitas fichas asignadas."
             label="Ficha relacionada"
-            options={sheets.map((sheet) => ({ label: `Ficha ${sheet.numero || sheet.id}`, value: sheet.id }))}
+            options={[
+              { label: 'Sin ficha relacionada', value: '' },
+              ...sheets.map((sheet) => ({ label: `Ficha ${sheet.numero || sheet.id}`, value: sheet.id })),
+            ]}
             value={form.fichaId}
             onChange={(fichaId) => onChange({ ...form, fichaId, proyectoId: '' })}
           />
@@ -1497,7 +1556,16 @@ function PasanteTaskManager({
               <Text style={styles.taskAttachmentTitle}>Imágenes o archivos</Text>
               <Text style={styles.taskAttachmentText}>Adjunta guías, fotos, PDF, Word o Excel para que el pasante tenga el contexto completo.</Text>
             </View>
-            <ActionButton label="Añadir" onPress={pickTaskAttachments} />
+            <View style={styles.attachmentPickerActions}>
+              <Pressable onPress={pickTaskPhotos} style={styles.attachmentPickerButton}>
+                <MaterialCommunityIcons name="image-multiple-outline" size={19} color={instructorPalette.primary} />
+                <Text style={styles.attachmentPickerText}>Fotos</Text>
+              </Pressable>
+              <Pressable onPress={pickTaskAttachments} style={styles.attachmentPickerButton}>
+                <MaterialCommunityIcons name="file-upload-outline" size={19} color={instructorPalette.primary} />
+                <Text style={styles.attachmentPickerText}>Archivos</Text>
+              </Pressable>
+            </View>
           </View>
           <View style={styles.attachmentList}>
             {form.archivos.map((file, index) => (
@@ -1632,15 +1700,12 @@ function PasanteTaskCard({
 }: {
   onDelete: () => void;
   onEdit: () => void;
-  onSaveObservation: (text: string) => void;
+  onSaveObservation: (text: string) => Promise<void>;
   onValidate: () => void;
   task: PasanteTaskRecord;
 }) {
-  const [observation, setObservation] = useState(task.observacionInstructor || '');
-
-  useEffect(() => {
-    setObservation(task.observacionInstructor || '');
-  }, [task.observacionInstructor]);
+  const [observation, setObservation] = useState('');
+  const observations = [...(task.observaciones || [])].sort((a, b) => getMillis(a.creadoEn) - getMillis(b.creadoEn));
 
   return (
     <View style={styles.pasanteTaskCard}>
@@ -1662,8 +1727,17 @@ function PasanteTaskCard({
           <Text style={styles.autoText}>{task.descripcion}</Text>
         </View>
       ) : null}
-      <TaskAttachmentList archivos={task.archivos || []} />
-      {task.observacionPasante ? (
+      <TaskAttachmentList archivos={task.archivos || []} title="Adjuntos del instructor" />
+      <TaskAttachmentList archivos={task.archivosPasante || []} title="Entrega del pasante" />
+      {observations.length ? observations.map((item, index) => (
+        <View key={item.id || `${item.autorRol}-${index}`} style={styles.taskNote}>
+          <MaterialCommunityIcons name="message-reply-text-outline" size={16} color={instructorPalette.primary} />
+          <View style={styles.copy}>
+            <Text style={styles.taskNoteLabel}>{item.autorRol || 'Usuario'} · {item.autorNombre || ''}</Text>
+            <Text style={styles.taskNoteText}>{item.texto}</Text>
+          </View>
+        </View>
+      )) : task.observacionPasante ? (
         <View style={styles.taskNote}>
           <MaterialCommunityIcons name="message-reply-text-outline" size={16} color={instructorPalette.primary} />
           <View style={styles.copy}>
@@ -1673,16 +1747,29 @@ function PasanteTaskCard({
         </View>
       ) : null}
       <View style={styles.taskObservationBox}>
-        <Field
-          label="Observación del instructor"
-          multiline
-          placeholder="Escribe una observación para esta tarea..."
-          value={observation}
-          onChangeText={setObservation}
-        />
+        <Text style={styles.fieldLabel}>Observación del instructor</Text>
+        <View style={styles.taskObservationComposer}>
+          <TextInput
+            multiline
+            placeholder="Escribe una observación para esta tarea..."
+            placeholderTextColor={instructorPalette.textMuted}
+            style={styles.taskObservationInput}
+            value={observation}
+            onChangeText={setObservation}
+          />
+          <Pressable
+            accessibilityLabel="Enviar observación"
+            disabled={!observation.trim()}
+            onPress={async () => {
+              await onSaveObservation(observation);
+              setObservation('');
+            }}
+            style={[styles.taskObservationSend, !observation.trim() && styles.taskObservationSendDisabled]}>
+            <MaterialCommunityIcons name="arrow-up" size={20} color="#FFFFFF" />
+          </Pressable>
+        </View>
       </View>
       <View style={styles.taskCardActions}>
-        <ActionButton label="Guardar observación" onPress={() => onSaveObservation(observation)} />
         <ActionButton label="Editar" onPress={onEdit} />
         <ActionButton label="Eliminar" onPress={onDelete} />
         {task.estado === 'Hecho' && !task.validadaPorInstructor ? (
@@ -1693,7 +1780,8 @@ function PasanteTaskCard({
   );
 }
 
-function TaskAttachmentList({ archivos }: { archivos: ProjectAttachment[] }) {
+function TaskAttachmentList({ archivos, title }: { archivos: ProjectAttachment[]; title?: string }) {
+  const [previewImageUri, setPreviewImageUri] = useState('');
   if (!archivos.length) {
     return null;
   }
@@ -1715,18 +1803,31 @@ function TaskAttachmentList({ archivos }: { archivos: ProjectAttachment[] }) {
 
   return (
     <View style={styles.taskAttachmentList}>
-      {archivos.map((file, index) => (
-        <Pressable
-          key={`${file.url || file.uri || file.nombre}-${index}`}
-          onPress={() => openAttachment(file)}
-          style={styles.taskAttachmentItem}>
-          <View style={styles.taskAttachmentFileIcon}>
-            <MaterialCommunityIcons name={file.mimeType.startsWith('image/') ? 'image-outline' : 'file-document-outline'} size={16} color={instructorPalette.primary} />
-          </View>
-          <Text numberOfLines={1} style={styles.attachmentText}>{file.nombre || 'Adjunto'}</Text>
-          <MaterialCommunityIcons name="open-in-new" size={16} color={instructorPalette.primary} />
-        </Pressable>
-      ))}
+      {title ? <Text style={styles.taskAttachmentGroupTitle}>{title}</Text> : null}
+      {archivos.map((file, index) => {
+        const fileUrl = getProjectPublicFileUrl(file) || normalizeFileUrl(file.url || file.uri) || '';
+        const isImage = /^image\//i.test(file.mimeType || '') || /\.(jpe?g|png|gif|webp|heic)(\?|$)/i.test(fileUrl);
+        return isImage && fileUrl ? (
+          <Pressable key={`${fileUrl}-${index}`} onPress={() => setPreviewImageUri(fileUrl)} style={styles.taskImageButton}>
+            <Image source={{ uri: fileUrl }} style={styles.taskImagePreview} />
+            <View style={styles.taskImageOverlay}>
+              <MaterialCommunityIcons name="arrow-expand" size={17} color="#FFFFFF" />
+            </View>
+          </Pressable>
+        ) : (
+          <Pressable
+            key={`${file.url || file.uri || file.nombre}-${index}`}
+            onPress={() => openAttachment(file)}
+            style={styles.taskAttachmentItem}>
+            <View style={styles.taskAttachmentFileIcon}>
+              <MaterialCommunityIcons name="file-document-outline" size={16} color={instructorPalette.primary} />
+            </View>
+            <Text numberOfLines={1} style={styles.attachmentText}>{file.nombre || 'Adjunto'}</Text>
+            <MaterialCommunityIcons name="open-in-new" size={16} color={instructorPalette.primary} />
+          </Pressable>
+        );
+      })}
+      <ImagePreviewModal onClose={() => setPreviewImageUri('')} uri={previewImageUri} />
     </View>
   );
 }
@@ -1789,6 +1890,7 @@ function ProjectCard({
   groups,
   learners,
   onEdit,
+  onDelete,
   onOpenFile,
   onSelect,
   project,
@@ -1797,6 +1899,7 @@ function ProjectCard({
   groups: WorkGroup[];
   learners: AcademicUser[];
   onEdit: () => void;
+  onDelete: () => void;
   onOpenFile: (file: { uri?: string | null; url?: string | null }) => void;
   onSelect: () => void;
   project: AcademicProject;
@@ -1852,6 +1955,9 @@ function ProjectCard({
             <Pressable onPress={onEdit} style={[styles.stateButton, styles.editButton]}>
               <Text style={[styles.stateButtonText, styles.editButtonText]}>Editar</Text>
             </Pressable>
+            <Pressable onPress={onDelete} style={[styles.stateButton, styles.deleteButton]}>
+              <Text style={styles.deleteButtonText}>Eliminar</Text>
+            </Pressable>
           </View>
         </View>
       </View>
@@ -1863,11 +1969,13 @@ function GroupCard({
   group,
   learners,
   onEdit,
+  onDelete,
   onRemoveLearner,
 }: {
   group: WorkGroup;
   learners: AcademicUser[];
   onEdit: () => void;
+  onDelete: () => void;
   onRemoveLearner: (learnerId: string) => void;
 }) {
   const members = learners.filter((learner) =>
@@ -1891,6 +1999,9 @@ function GroupCard({
           </View>
           <Pressable onPress={onEdit} style={styles.editButton}>
             <Text style={styles.editButtonText}>Editar</Text>
+          </Pressable>
+          <Pressable onPress={onDelete} style={styles.memberRemoveButton}>
+            <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C97B63" />
           </Pressable>
         </View>
       </View>
@@ -3035,6 +3146,38 @@ const styles = StyleSheet.create({
   taskObservationBox: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
+    gap: 8,
+  },
+  taskObservationComposer: {
+    alignItems: 'flex-end',
+    backgroundColor: instructorPalette.surfaceMuted,
+    borderColor: instructorPalette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    padding: 7,
+    paddingLeft: 14,
+  },
+  taskObservationInput: {
+    color: instructorPalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 13,
+    maxHeight: 100,
+    minHeight: 32,
+    paddingVertical: 6,
+  },
+  taskObservationSend: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.primary,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  taskObservationSendDisabled: {
+    opacity: 0.35,
   },
   taskCardActions: {
     alignItems: 'center',
@@ -3045,6 +3188,55 @@ const styles = StyleSheet.create({
   },
   taskAttachmentList: {
     gap: 8,
+  },
+  taskAttachmentGroupTitle: {
+    color: instructorPalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    marginTop: 3,
+  },
+  taskImageButton: {
+    borderRadius: 14,
+    height: 180,
+    overflow: 'hidden',
+    position: 'relative',
+    width: '100%',
+  },
+  taskImagePreview: {
+    height: '100%',
+    width: '100%',
+  },
+  taskImageOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.48)',
+    borderRadius: 15,
+    bottom: 9,
+    height: 30,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 9,
+    width: 30,
+  },
+  attachmentPickerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  attachmentPickerButton: {
+    alignItems: 'center',
+    backgroundColor: instructorPalette.surfaceMuted,
+    borderColor: instructorPalette.border,
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  attachmentPickerText: {
+    color: instructorPalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
   },
   fieldBlock: {
     gap: 8,
@@ -3741,6 +3933,14 @@ const styles = StyleSheet.create({
     color: instructorPalette.primary,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 11,
+  },
+  deleteButton: {
+    backgroundColor: '#FCE8E3',
+  },
+  deleteButtonText: {
+    color: '#B65343',
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 10,
   },
   memberList: {
     gap: 8,

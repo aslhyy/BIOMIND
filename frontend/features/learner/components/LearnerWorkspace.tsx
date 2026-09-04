@@ -44,6 +44,7 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
   const [voiceSuggestionsEnabled, setVoiceSuggestionsEnabled] = useState(false);
   const [assistantProjectId, setAssistantProjectId] = useState('general');
   const [assistantAutoVoiceSignal, setAssistantAutoVoiceSignal] = useState(0);
+  const [newsTarget, setNewsTarget] = useState<{ bitacoraId?: string; projectId?: string; conversationId?: string }>({});
 
   const [fontsLoaded] = useFonts({
     PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
@@ -76,18 +77,24 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 124 }]}>
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: insets.bottom + (activeTab === 'asistente' ? 210 : 124) },
+          ]}>
           {activeTab === 'inicio' ? <HeaderCard session={session} /> : null}
 
           {activeTab === 'inicio' ? (
             <LearnerHomeTab
               session={session}
               onOpenAssistant={openAssistantForProject}
-              onOpenNews={(target) => setActiveTab(target)}
+              onOpenNews={(target) => {
+                setNewsTarget(target);
+                setActiveTab(target.action);
+              }}
             />
           ) : null}
           {activeTab === 'historial' ? (
-            <LearnerBitacorasTab session={session} />
+            <LearnerBitacorasTab session={session} focus={newsTarget} />
           ) : null}
           {activeTab === 'asistente' ? (
             <LearnerAIBitacoraAssistant
@@ -101,6 +108,7 @@ export function LearnerWorkspace({ onSignOut, session }: LearnerWorkspaceProps) 
           ) : null}
           {activeTab === 'proyectos' ? (
             <ProjectConversations
+              preferredConversationId={newsTarget.conversationId}
               session={session}
               tone={{
                 accent: learnerPalette.primary,

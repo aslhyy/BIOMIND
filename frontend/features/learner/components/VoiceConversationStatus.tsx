@@ -32,7 +32,14 @@ export function VoiceConversationStatus({ error, isActive, partialTranscript, pe
         : 'dots-horizontal-circle-outline';
 
   return (
-    <View style={[styles.card, isActive && styles.cardActive]}>
+    <View style={[
+      styles.card,
+      isActive && styles.cardActive,
+      status === 'listening' && styles.cardListening,
+      (status === 'processing' || status === 'waiting-ai') && styles.cardProcessing,
+      status === 'speaking' && styles.cardSpeaking,
+      status === 'error' && styles.cardError,
+    ]}>
       <View style={styles.statusRow}>
         <View style={[styles.iconWrap, isActive && styles.iconWrapActive]}>
           <MaterialCommunityIcons name={iconName} size={18} color={isActive ? '#FFFFFF' : learnerPalette.primary} />
@@ -43,8 +50,8 @@ export function VoiceConversationStatus({ error, isActive, partialTranscript, pe
             {isActive
               ? pendingConfirmation
                 ? 'Di “sí” para enviar o “no” para volver a dictar el mensaje.'
-                : 'Habla con naturalidad. Antes de enviar, Biomind repetirá lo que entendió.'
-              : 'Toca iniciar para conversar por voz con BIOMIND IA.'}
+                : 'Habla con naturalidad. La sesión seguirá activa hasta que la finalices.'
+              : 'Toca iniciar para comenzar una sesión de laboratorio.'}
           </Text>
         </View>
       </View>
@@ -74,6 +81,22 @@ const styles = StyleSheet.create({
   cardActive: {
     backgroundColor: learnerPalette.mint,
     borderColor: learnerPalette.primary,
+  },
+  cardListening: {
+    backgroundColor: '#EAF8F1',
+    borderColor: '#62A982',
+  },
+  cardProcessing: {
+    backgroundColor: '#FFF7DE',
+    borderColor: '#D7A93E',
+  },
+  cardSpeaking: {
+    backgroundColor: '#E9F2FF',
+    borderColor: '#5D8FC9',
+  },
+  cardError: {
+    backgroundColor: '#FFF0F2',
+    borderColor: '#B84A62',
   },
   statusRow: {
     alignItems: 'center',

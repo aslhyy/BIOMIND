@@ -407,6 +407,10 @@ export function GeminiAssistantModule({
             ? 'La IA puede hacer preguntas guiadas para profundizar en el registro.'
             : 'La IA debe escuchar y transcribir sin insistir con preguntas adicionales.',
           'Responde siempre en español claro, útil, corto y con foco en biotecnología vegetal.',
+          'Responde en una o dos frases por defecto; amplía solamente si el usuario lo pide.',
+          'Indica si una afirmación proviene de los datos de BIOMIND, de un documento disponible o de conocimiento general.',
+          'No inventes datos académicos, concentraciones, tiempos, sustancias ni protocolos de laboratorio.',
+          'Puedes proponer borradores y explicar cómo navegar, pero no afirmes que guardaste, editaste, validaste o eliminaste información si la aplicación no ejecutó esa acción.',
           'Si faltan datos, dilo de forma honesta y propone el siguiente paso.',
         ].join('\n'),
       });
@@ -437,6 +441,8 @@ export function GeminiAssistantModule({
 
   const voiceConversation = useVoiceConversation({
     canStart: voiceEnabled && Boolean(selectedProjectId),
+    confirmBeforeSend: false,
+    continuous: false,
     language: 'es-CO',
     onSendMessage: (text) => sendPrompt(text, 'voice'),
     silenceMs: 1500,

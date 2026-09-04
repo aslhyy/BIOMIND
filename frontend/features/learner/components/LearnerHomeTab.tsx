@@ -97,7 +97,7 @@ export function LearnerHomeTab({
   session,
 }: {
   onOpenAssistant: (projectId: string, autoStartVoice?: boolean) => void;
-  onOpenNews: (target: 'historial' | 'proyectos') => void;
+  onOpenNews: (target: { action: 'historial' | 'proyectos'; bitacoraId?: string; projectId?: string; conversationId?: string }) => void;
   session: AuthenticatedSession;
 }) {
   const [context, setContext] = useState<AcademicContext>(emptyContext);
@@ -250,6 +250,8 @@ export function LearnerHomeTab({
           title: 'Nueva observación',
           detail: `${bitacora.revisadoPorNombre || 'Instructor o pasante'} comentó en ${baseTitle}.`,
           action: 'historial' as const,
+          bitacoraId: bitacora.id,
+          projectId: bitacora.proyectoId,
           timestamp: getAnyTimestamp(bitacora.actualizadoEn) || getAnyTimestamp(bitacora.creadoEn) || getDateTimestamp(bitacora.fecha),
           tone: learnerPalette.peachSurface,
           accent: '#C45C43',
@@ -263,6 +265,8 @@ export function LearnerHomeTab({
           title: 'Bitácora aprobada',
           detail: `${baseTitle} fue revisado y aprobado.`,
           action: 'historial' as const,
+          bitacoraId: bitacora.id,
+          projectId: bitacora.proyectoId,
           timestamp: getAnyTimestamp(bitacora.actualizadoEn) || getDateTimestamp(bitacora.fecha),
           tone: learnerPalette.mint,
           accent: learnerPalette.primary,
@@ -276,6 +280,8 @@ export function LearnerHomeTab({
           title: 'Revisión pendiente',
           detail: `${baseTitle} necesita ajuste o corrección.`,
           action: 'historial' as const,
+          bitacoraId: bitacora.id,
+          projectId: bitacora.proyectoId,
           timestamp: getAnyTimestamp(bitacora.actualizadoEn) || getDateTimestamp(bitacora.fecha),
           tone: learnerPalette.gold,
           accent: learnerPalette.goldText,
@@ -305,6 +311,7 @@ export function LearnerHomeTab({
         title: 'Mensaje nuevo',
         detail: `${summary.ultimoRemitenteNombre || 'Alguien'}: ${summary.ultimoMensaje || 'Nuevo mensaje académico'}`,
         action: 'proyectos' as const,
+        conversationId: summary.id,
         timestamp: getAnyTimestamp(summary.actualizadoEn),
         tone: learnerPalette.softGreen,
         accent: learnerPalette.secondary,
@@ -376,7 +383,7 @@ export function LearnerHomeTab({
         {newsItems.length ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.newsCarouselContent}>
             {newsItems.map((item) => (
-              <LearnerNewsCard key={item.id} item={item} onPress={() => onOpenNews(item.action)} />
+              <LearnerNewsCard key={item.id} item={item} onPress={() => onOpenNews(item)} />
             ))}
           </ScrollView>
         ) : (

@@ -1,5 +1,6 @@
 import { requireOptionalNativeModule } from 'expo';
 import { Platform } from 'react-native';
+import { createLocalWhisperSession, isLocalWhisperSupported } from '@/services/localWhisperRecognition';
 
 type SpeechRecognitionAlternative = {
   transcript: string;
@@ -49,6 +50,7 @@ const HANDS_FREE_IOS_CATEGORY = {
 };
 
 type SpeechSessionOptions = {
+  contextualStrings?: string[];
   language?: string;
   onEnd?: () => void;
   onError?: (message: string) => void;
@@ -97,6 +99,10 @@ export function isSpeechRecognitionSupported() {
     }
   }
 
+  if (isLocalWhisperSupported()) {
+    return true;
+  }
+
   return isWebSpeechRecognitionSupported();
 }
 
@@ -114,35 +120,37 @@ export function configureHandsFreeAudioSession() {
 export async function requestSpeechRecognitionPermissions(): Promise<SpeechPermissionResult> {
   const nativeSpeech = getNativeSpeechModule();
 
-  if (!nativeSpeech) {
-    return {
-      granted: isWebSpeechRecognitionSupported(),
-      message: 'El reconocimiento nativo de voz requiere abrir Biomind desde una development build, no desde Expo Go.',
-    };
+  if (nativeSpeech) {
+    if (cachedSpeechPermission?.granted) return cachedSpeechPermission;
+    try {
+      const permission = await nativeSpeech.requestPermissionsAsync();
+      cachedSpeechPermission = permission.granted
+        ? { granted: true }
+        : { granted: false, message: 'Activa los permisos de micrófono y reconocimiento de voz desde Ajustes del iPhone.' };
+      return cachedSpeechPermission;
+    } catch (error) {
+      const typedError = error as { message?: string };
+      return { granted: false, message: typedError?.message || 'No pudimos solicitar permisos de voz.' };
+    }
   }
 
-  if (cachedSpeechPermission?.granted) {
-    return cachedSpeechPermission;
+  if (isLocalWhisperSupported()) {
+    try {
+      const { requestRecordingPermissionsAsync } = await import('expo-audio');
+      const permission = await requestRecordingPermissionsAsync();
+      return permission.granted
+        ? { granted: true }
+        : { granted: false, message: 'Activa el permiso de micrófono para BIOMIND desde Ajustes.' };
+    } catch (error) {
+      const typedError = error as { message?: string };
+      return { granted: false, message: typedError?.message || 'No pudimos solicitar el permiso de micrófono.' };
+    }
   }
 
-  try {
-    const permission = await nativeSpeech.requestPermissionsAsync();
-    cachedSpeechPermission = permission.granted
-      ? { granted: true }
-      : {
-        granted: false,
-        message: 'Activa los permisos de microfono y reconocimiento de voz desde Ajustes del iPhone.',
-      };
-
-    return cachedSpeechPermission;
-  } catch (error) {
-    const typedError = error as { message?: string };
-    cachedSpeechPermission = {
-      granted: false,
-      message: typedError?.message || 'No pudimos solicitar permisos de voz.',
-    };
-    return cachedSpeechPermission;
-  }
+  return {
+    granted: isWebSpeechRecognitionSupported(),
+    message: 'El reconocimiento de voz requiere una development build de Biomind, no Expo Go.',
+  };
 }
 
 function createWebSpeechRecognitionSession({
@@ -199,6 +207,7 @@ function createWebSpeechRecognitionSession({
 }
 
 function createNativeSpeechRecognitionSession({
+  contextualStrings,
   language,
   onEnd,
   onError,
@@ -236,7 +245,11 @@ function createNativeSpeechRecognitionSession({
       cleanup();
     }),
     nativeSpeech.addListener('result', (event) => {
-      const transcript = event?.results?.[0]?.transcript || '';
+      const alternatives = Array.isArray(event?.results) ? event.results : [];
+      const transcript = alternatives
+        .slice()
+        .sort((a: { confidence?: number }, b: { confidence?: number }) => (b.confidence || 0) - (a.confidence || 0))[0]
+        ?.transcript || '';
       onResult(transcript.trim(), Boolean(event?.isFinal));
     }),
   ];
@@ -257,8 +270,11 @@ function createNativeSpeechRecognitionSession({
       nativeSpeech.start({
         addsPunctuation: true,
         continuous: true,
+        contextualStrings,
         interimResults: true,
+        iosTaskHint: 'dictation',
         lang: language,
+        maxAlternatives: 3,
         iosCategory: HANDS_FREE_IOS_CATEGORY,
       });
     },
@@ -271,12 +287,29 @@ function createNativeSpeechRecognitionSession({
 }
 
 export function createSpeechRecognitionSession({
+  contextualStrings = [],
   language = 'es-CO',
   onEnd,
   onError,
   onResult,
   onStart,
 }: SpeechSessionOptions) {
-  const options = { language, onEnd, onError, onResult, onStart };
-  return createNativeSpeechRecognitionSession(options) || createWebSpeechRecognitionSession(options);
+  const options = { contextualStrings, language, onEnd, onError, onResult, onStart };
+  const nativeSession = createNativeSpeechRecognitionSession(options);
+  if (nativeSession) return nativeSession;
+
+  if (isLocalWhisperSupported()) {
+    return createLocalWhisperSession({
+      initialPrompt: [
+        'Conversación de laboratorio de biotecnología vegetal en español de Colombia.',
+        'Transcribe literalmente, conservando cantidades, negaciones y preguntas.',
+        contextualStrings.join(', '),
+      ].join(' '),
+      onEnd,
+      onError,
+      onResult,
+      onStart,
+    });
+  }
+  return createWebSpeechRecognitionSession(options);
 }

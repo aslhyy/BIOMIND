@@ -2,7 +2,6 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import * as Speech from 'expo-speech';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { learnerPalette } from '@/features/learner/theme';
@@ -14,9 +13,11 @@ import { useVoiceConversation } from '@/hooks/useVoiceConversation';
 // @ts-ignore
 import { escucharContextoAcademicoUsuario, escucharGruposTrabajo, escucharProyectos } from '@/services/academic';
 // @ts-ignore
-import { guardarBitacora } from '@/services/bitacoras';
+import { escucharBitacorasAprendiz, guardarBitacora } from '@/services/bitacoras';
 import { generateGeminiReply } from '@/services/gemini';
-import { extractSendCommand } from '@/services/voiceCommands';
+import { correctBiotechnologyTranscript, extractSendCommand, parseLabVoiceIntent } from '@/services/voiceCommands';
+import { playVoiceCue } from '@/services/voiceCueService';
+import { speakText, stopTextToSpeech } from '@/services/textToSpeechService';
 import { VoiceConversationButton } from './VoiceConversationButton';
 import { VoiceConversationStatus } from './VoiceConversationStatus';
 
@@ -62,7 +63,7 @@ type AssistantConversation = {
   titleGenerated?: boolean;
 };
 
-type FieldKey = 'fecha' | 'descripcion' | 'avance' | 'dificultades' | 'archivoUrl';
+type FieldKey = 'nombre' | 'fecha' | 'descripcion' | 'avance' | 'dificultades' | 'archivoUrl';
 
 type Evidence = {
   nombre: string;
@@ -72,6 +73,7 @@ type Evidence = {
 };
 
 type FormState = {
+  nombre: string;
   archivoNombre: string;
   archivoUrl: string;
   avance: string;
@@ -85,6 +87,29 @@ type ExtraAnswer = {
   answer: string;
   question: string;
 };
+
+type PracticeMemory = {
+  actividad: string;
+  procedimiento: string;
+  materiales: string;
+  resultados: string;
+  dificultades: string;
+};
+
+const emptyPracticeMemory: PracticeMemory = {
+  actividad: '',
+  procedimiento: '',
+  materiales: '',
+  resultados: '',
+  dificultades: '',
+};
+
+const biotechnologyVocabulary = [
+  'explante', 'explantes', 'cultivo in vitro', 'micropropagación', 'hipoclorito de sodio',
+  'desinfección', 'contaminación cruzada', 'medio de cultivo', 'Murashige y Skoog',
+  'meristemo', 'meristemos', 'callogénesis', 'organogénesis', 'aclimatación', 'fitohormona',
+  'auxina', 'citoquinina', 'autoclave', 'cabina de flujo laminar', 'inóculo', 'siembra',
+];
 
 type Props = {
   autoSaveEnabled?: boolean;
@@ -101,6 +126,7 @@ const emptyContext = {
 };
 
 const fieldLabels: Record<FieldKey, string> = {
+  nombre: 'Nombre de la bitácora',
   fecha: 'Fecha',
   descripcion: 'Actividad realizada',
   avance: 'Avance alcanzado',
@@ -108,7 +134,7 @@ const fieldLabels: Record<FieldKey, string> = {
   archivoUrl: 'Documento externo opcional',
 };
 
-const guidedOrder: FieldKey[] = ['fecha', 'descripcion', 'avance', 'dificultades', 'archivoUrl'];
+const guidedOrder: FieldKey[] = ['nombre', 'fecha', 'descripcion', 'avance', 'dificultades'];
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -143,16 +169,57 @@ function cleanSpeechText(value: string) {
 }
 
 function isYes(value: string) {
-  return /\b(si|sí|claro|dale|bueno|hagamos|pregunta|continua|continúa)\b/i.test(value);
+  const normalized = value.trim().toLocaleLowerCase('es').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /^(si|claro|confirmo|de acuerdo|guardala|guardalo|hazlo|dale)(\b|$)/.test(normalized);
 }
 
-function isSaveCommand(value: string) {
+function isStopSessionCommand(value: string) {
   const normalized = value.toLocaleLowerCase('es').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  return /\b(guardar|guarda|crear|crea|registrar|registra)\b.*\b(bitacora|registro)\b/.test(normalized);
+  return /\b(finalizar|terminar|detener|pausar|cerrar|salir)\b.*\b(sesion|conversacion|escucha|microfono|manos libres|practica)\b/.test(normalized);
+}
+
+function splitEmbeddedVoiceCommand(value: string) {
+  const text = value.trim();
+  const command = text.match(/\b(?:l[eé]eme|dame|muestra(?:me)?|crear|crea|guardar|guarda|finalizar|terminar|cerrar)\b.*\b(?:resumen|bit[aá]cora|conversaci[oó]n|sesi[oó]n)\b/i);
+  if (!command || typeof command.index !== 'number' || command.index < 8) return [text];
+  return [text.slice(0, command.index).trim(), text.slice(command.index).trim()].filter(Boolean);
+}
+
+function getTechnicalSafetyFallback(question: string) {
+  const normalized = question.toLocaleLowerCase('es').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  if (/\bph\b/.test(normalized)) {
+    return 'El pH influye en la disponibilidad de nutrientes y en la gelificación del medio. Ajústalo antes de esterilizar según el protocolo del laboratorio, porque el calentamiento puede modificarlo.';
+  }
+  if (/condens/.test(normalized)) {
+    return 'La condensación no confirma contaminación, pero el exceso de humedad puede favorecerla y dificultar la observación. Revisa turbidez, cambios de color, crecimiento extraño y el cierre del frasco sin abrirlo; si hay sospecha, aíslalo y avisa al instructor.';
+  }
+  if (/oscurec|marron|necros/.test(normalized)) {
+    return 'El oscurecimiento no significa necesariamente contaminación: también puede deberse a oxidación o estrés del tejido. Revisa si hay turbidez, micelio, colonias u olor anormal y confirma el manejo con tu instructor.';
+  }
+  if (/turbidez|turbio/.test(normalized)) {
+    return 'La turbidez es una señal compatible con contaminación microbiana, aunque debe confirmarse junto con otros cambios visibles. No abras el frasco: aíslalo, identifícalo y notifícalo al instructor.';
+  }
+  if (/agar|solidific|gelific/.test(normalized)) {
+    return 'Un medio con agar puede no solidificar por una concentración insuficiente, pH inadecuado, calentamiento incorrecto o errores de preparación. Mantén el frasco cerrado y revisa cantidades, pH y ciclo aplicado con el instructor.';
+  }
+  if (/contamin|frasco|recipiente/.test(normalized)) {
+    return 'No abras el recipiente sospechoso. Aíslalo, identifícalo y avisa al instructor; revisen el protocolo del laboratorio para decidir su descarte o tratamiento seguro.';
+  }
+  if (/autoclave|esteriliz/.test(normalized)) {
+    return 'Verifica el protocolo, la compatibilidad del material y los indicadores del ciclo antes de usarlo. No improvises tiempos ni temperaturas: confirma esos parámetros con el instructor responsable.';
+  }
+
+  return 'Por seguridad, conserva el material cerrado y consulta el protocolo específico del laboratorio con tu instructor. Puedes reformular la duda indicando el material, el cambio observado y la etapa del procedimiento.';
+}
+
+function getSessionWelcome(projectTitle: string) {
+  return `Sesión lista para ${projectTitle}. ¿Quieres acompañamiento automático o prefieres hablarme solo cuando me necesites?`;
 }
 
 function isNo(value: string) {
-  return /\b(no|nada|finalizar|guardar|terminar|listo)\b/i.test(value);
+  const normalized = value.trim().toLocaleLowerCase('es').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /^(no|cancelar|cancela|corregir|corrige|todavia no)(\b|$)/.test(normalized);
 }
 
 function extractDate(value: string) {
@@ -171,6 +238,8 @@ function extractUrl(value: string) {
 
 function getFieldQuestion(field: FieldKey, projectTitle: string, currentDate: string) {
   switch (field) {
+    case 'nombre':
+      return '¿Qué nombre quieres ponerle a esta bitácora?';
     case 'fecha':
       return `Empecemos la bitácora de ${projectTitle}. La fecha está como ${currentDate}. Si es otra, dime la fecha en formato AAAA-MM-DD.`;
     case 'descripcion':
@@ -225,6 +294,180 @@ function buildExtraNotes(extraAnswers: ExtraAnswer[]) {
   ].join('\n');
 }
 
+function getNextMemoryQuestion(memory: PracticeMemory) {
+  if (!memory.actividad) return '¿Qué actividad realizaron durante la práctica?';
+  if (!memory.procedimiento) return '¿Qué procedimiento realizaron?';
+  if (!memory.resultados) return '¿Qué resultado observable obtuvieron?';
+  if (!memory.dificultades) return '¿Se presentó alguna dificultad o riesgo? Puedes decir “sin dificultades”.';
+  return '';
+}
+
+function cleanPracticeStatement(value: string) {
+  const cleaned = correctBiotechnologyTranscript(value)
+    .replace(/^\s*(?:registra|registrar|anota|anotar|guarda|guardar)(?:\s+que)?\s+/i, '')
+    .replace(/^\s*como\s+actividad\s+/i, '')
+    .replace(/^\s*(?:a[nñ]ade|a[nñ]adir|agrega|agregar)(?:\s+que)?(?:\s+como\s+dificultad)?\s+/i, '')
+    .replace(/\bdecid[ií]\s+decidimos\b/gi, 'decidimos')
+    .replace(/\bexplante\s+es\b/gi, 'explantes')
+    .replace(/\s+([,.;:])/g, '$1')
+    .trim();
+  if (!cleaned) return '';
+  return `${cleaned.charAt(0).toUpperCase()}${cleaned.slice(1)}`.replace(/[.]+$/g, '');
+}
+
+function buildPracticeTitle(activity: string, projectTitle: string) {
+  const normalized = cleanPracticeStatement(activity)
+    .replace(/^(?:hoy\s+)?(?:iniciamos|realizamos|hicimos|se realizó|se realizo)\s+(?:la|el|una|un)?\s*/i, '')
+    .trim();
+  const title = normalized || `Bitácora de ${projectTitle}`;
+  return `${title.charAt(0).toUpperCase()}${title.slice(1)}`.slice(0, 80);
+}
+
+function asSentence(value: string) {
+  const clean = cleanPracticeStatement(value);
+  return clean ? `${clean}.` : '';
+}
+
+function memoryToForm(memory: PracticeMemory, current: FormState, projectTitle: string): FormState {
+  const description = [memory.actividad, memory.procedimiento, memory.materiales]
+    .map(asSentence)
+    .filter(Boolean)
+    .join('\n\n');
+  return {
+    ...current,
+    nombre: memory.actividad ? buildPracticeTitle(memory.actividad, projectTitle) : current.nombre,
+    descripcion: description || current.descripcion,
+    avance: asSentence(memory.resultados) || current.avance,
+    dificultades: asSentence(memory.dificultades) || current.dificultades,
+  };
+}
+
+function getUpdatedMemoryLabel(previous: PracticeMemory, next: PracticeMemory) {
+  if (next.dificultades !== previous.dificultades) return 'Dificultad registrada.';
+  if (next.resultados !== previous.resultados) return 'Resultado registrado.';
+  if (next.procedimiento !== previous.procedimiento || next.materiales !== previous.materiales) return 'Procedimiento registrado.';
+  if (next.actividad !== previous.actividad) return 'Actividad registrada.';
+  return 'Anotación registrada.';
+}
+
+function applyLocalMemoryUpdate(memory: PracticeMemory, note: string): PracticeMemory {
+  const cleanedNote = cleanPracticeStatement(note);
+  const normalized = cleanedNote.toLocaleLowerCase('es');
+  const appendUnique = (current: string, value: string) => {
+    if (!current) return value;
+    if (current.toLocaleLowerCase('es').includes(value.toLocaleLowerCase('es'))) return current;
+    return `${current}. ${value}`;
+  };
+
+  // Corrections such as "no te dije X, dije Y" must replace the mistaken
+  // fragment instead of becoming a new result or difficulty.
+  const rawCorrection = correctBiotechnologyTranscript(note)
+    .replace(/^(?:quiero|necesito)\s+que\s+corrijas\s+/i, 'corrige ')
+    .replace(/^(?:por\s+favor\s+)?corrige\s+(?:la\s+|el\s+)?/i, 'corrige ');
+  const explicitCorrection = rawCorrection.match(/^corrige\s+(resultado|procedimiento|actividad|dificultad(?:es)?|novedad(?:es)?|material(?:es)?|[uú]ltimo\s+dato|mensaje\s+anterior)\s*[:,]?\s*(.+)$/i);
+  const spokenCorrection = cleanedNote.match(/(?:no\s+(?:te\s+)?dije|quise\s+decir).*?\bdije\s+(.+)$/i)?.[1];
+  const correction = explicitCorrection?.[2] || spokenCorrection;
+  const correctionTarget = explicitCorrection?.[1]?.toLocaleLowerCase('es') || '';
+  const effectiveNote = correction ? cleanPracticeStatement(correction) : cleanedNote;
+  const effectiveNormalized = effectiveNote.toLocaleLowerCase('es');
+
+  if (/actividad/.test(correctionTarget)) return { ...memory, actividad: effectiveNote };
+  if (/procedimiento/.test(correctionTarget)) return { ...memory, procedimiento: effectiveNote };
+  if (/material/.test(correctionTarget)) return { ...memory, materiales: effectiveNote };
+  if (/dificultad/.test(correctionTarget)) return { ...memory, dificultades: effectiveNote };
+  if (/novedad/.test(correctionTarget)) return { ...memory, dificultades: effectiveNote };
+  if (/resultado/.test(correctionTarget)) return { ...memory, resultados: effectiveNote };
+  if (/mensaje anterior|ultimo dato|último dato/.test(correctionTarget)) {
+    const withoutPreamble = effectiveNote
+      .replace(/^(?:el\s+mensaje\s+anterior\s+)?(?:te\s+voy\s+a\s+decir\s+)?/i, '')
+      .replace(/^(?:registra|anota)(?:\s+que)?\s+/i, '');
+    return applyLocalMemoryUpdate(memory, withoutPreamble);
+  }
+
+  if (/^(?:hoy\s+)?(?:iniciamos|realizamos|hicimos|se\s+realiz[oó])\b/.test(effectiveNormalized)) {
+    return { ...memory, actividad: effectiveNote };
+  }
+
+  const procedureAndResult = effectiveNote.match(/^(.+?)\s+(?:al\s+finalizar|como\s+resultado)\s*[:,]?\s*(.+)$/i);
+  if (procedureAndResult) {
+    return {
+      ...memory,
+      procedimiento: appendUnique(memory.procedimiento, cleanPracticeStatement(procedureAndResult[1])),
+      resultados: correction ? cleanPracticeStatement(procedureAndResult[2]) : appendUnique(memory.resultados, cleanPracticeStatement(procedureAndResult[2])),
+    };
+  }
+
+  const resultAndDifficulty = effectiveNote.match(/^(.+?)\s+((?:uno|alguno)\s+de\s+los\s+frascos\s+(?:present[oó]|mostr[oó]).*)$/i);
+  if (resultAndDifficulty) {
+    return {
+      ...memory,
+      resultados: appendUnique(memory.resultados, cleanPracticeStatement(resultAndDifficulty[1])),
+      dificultades: appendUnique(memory.dificultades, cleanPracticeStatement(resultAndDifficulty[2])),
+    };
+  }
+
+  const compoundResult = effectiveNote.match(/^(.+?)\s+(?:adem[aá]s|y)\s+(observamos|obtuvimos|los?\s+explantes?|el\s+medio)\b(.+)$/i);
+  if (compoundResult) {
+    const procedure = cleanPracticeStatement(compoundResult[1]);
+    const result = cleanPracticeStatement(`${compoundResult[2]}${compoundResult[3]}`);
+    return {
+      ...memory,
+      procedimiento: correction ? procedure : appendUnique(memory.procedimiento, procedure),
+      resultados: appendUnique(memory.resultados, result),
+    };
+  }
+
+  if (/^(?:como\s+)?(?:dificultad|novedad)|riesgo|accident|condens|sin dificultades|present[oó]\s+turbidez/.test(effectiveNormalized)) {
+    return { ...memory, dificultades: appendUnique(memory.dificultades, effectiveNote) };
+  }
+  if (/resultado|quedaron|qued[oó]|obtuve|obtuvimos|observamos|presentaron|crecieron|germin|coloraci[oó]n|oscurec|solidific/.test(effectiveNormalized)) {
+    return { ...memory, resultados: correction ? effectiveNote : appendUnique(memory.resultados, effectiveNote) };
+  }
+  if (/^(?:utilizamos|usamos|empleamos|materiales?)\b/.test(effectiveNormalized)) {
+    return { ...memory, materiales: correction ? effectiveNote : appendUnique(memory.materiales, effectiveNote) };
+  }
+  if (/lav|aplic|mezcl|durante|procedimiento|hipoclorito|ajust|a[nñ]ad|esteriliz|trabajamos|transferimos|sembramos/.test(effectiveNormalized)) {
+    return { ...memory, procedimiento: correction ? effectiveNote : appendUnique(memory.procedimiento, effectiveNote) };
+  }
+  return { ...memory, actividad: memory.actividad || effectiveNote };
+}
+
+function buildPracticeSummary(memory: PracticeMemory) {
+  const safe = removeQuestionsFromMemory(memory);
+  const sections = [
+    safe.actividad && `Actividad realizada: ${asSentence(buildPracticeTitle(safe.actividad, 'Práctica'))}`,
+    safe.procedimiento && `Procedimiento: ${asSentence(safe.procedimiento)}`,
+    safe.materiales && `Materiales: ${asSentence(safe.materiales)}`,
+    safe.resultados && `Resultados observados: ${asSentence(safe.resultados)}`,
+    safe.dificultades && `Dificultades o novedades: ${asSentence(safe.dificultades)}`,
+  ].filter(Boolean);
+  return sections.length
+    ? sections.join('\n')
+    : 'Todavía no hay información registrada. Cuéntame la práctica o di “crear bitácora”.';
+}
+
+function removeQuestionsFromMemory(memory: PracticeMemory): PracticeMemory {
+  const keepNote = (value: string) => {
+    if (!value) return '';
+    return value
+      .split(/\.\s+(?=[A-ZÁÉÍÓÚÑ])/)
+      .map((part) => cleanPracticeStatement(part))
+      .filter((part) => {
+        if (!part) return false;
+        if (parseLabVoiceIntent(part).type !== 'practice-note') return false;
+        return !/^(?:corrige|eso\s+no\s+era|no\s+era|qu[eé]\s+no\s+es)\b/i.test(part);
+      })
+      .join('. ');
+  };
+  return {
+    actividad: keepNote(memory.actividad),
+    procedimiento: keepNote(memory.procedimiento),
+    materiales: keepNote(memory.materiales),
+    resultados: keepNote(memory.resultados),
+    dificultades: keepNote(memory.dificultades),
+  };
+}
+
 function mapGeminiError(error: unknown) {
   const typedError = error as { code?: string; message?: string };
 
@@ -246,8 +489,10 @@ export function LearnerAIBitacoraAssistant({
   const [context, setContext] = useState(emptyContext);
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<WorkGroup[]>([]);
+  const [learnerBitacoras, setLearnerBitacoras] = useState<RecordItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
-  const [assistantQuestionsEnabled, setAssistantQuestionsEnabled] = useState(true);
+  const [assistantQuestionsEnabled, setAssistantQuestionsEnabled] = useState(false);
+  const [companionMode, setCompanionMode] = useState<'automatic' | 'on-demand' | null>(null);
   const [activeField, setActiveField] = useState<FieldKey>('fecha');
   const [draft, setDraft] = useState('');
   const [activeConversationId, setActiveConversationId] = useState(buildConversationId);
@@ -257,7 +502,10 @@ export function LearnerAIBitacoraAssistant({
   const [extraAnswers, setExtraAnswers] = useState<ExtraAnswer[]>([]);
   const [currentExtraQuestion, setCurrentExtraQuestion] = useState('');
   const [awaitingExtraConsent, setAwaitingExtraConsent] = useState(false);
+  const [awaitingRequiredField, setAwaitingRequiredField] = useState<FieldKey | null>(null);
+  const [awaitingSaveConfirmation, setAwaitingSaveConfirmation] = useState(false);
   const [form, setForm] = useState<FormState>({
+    nombre: '',
     archivoNombre: '',
     archivoUrl: '',
     avance: '',
@@ -266,6 +514,7 @@ export function LearnerAIBitacoraAssistant({
     evidencias: [],
     fecha: today(),
   });
+  const [practiceMemory, setPracticeMemory] = useState<PracticeMemory>(emptyPracticeMemory);
   const [feedback, setFeedback] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -276,7 +525,13 @@ export function LearnerAIBitacoraAssistant({
   const [previewImageUri, setPreviewImageUri] = useState('');
   const lastAutoSendDraftRef = useRef('');
   const composerInputRef = useRef<TextInput | null>(null);
+  const hydratedPracticeKeyRef = useRef('');
   const titleRequestsRef = useRef(new Set<string>());
+  const practiceMemoryRef = useRef<PracticeMemory>(emptyPracticeMemory);
+
+  useEffect(() => {
+    practiceMemoryRef.current = practiceMemory;
+  }, [practiceMemory]);
 
   useEffect(() => {
     const handleError = (error: any) =>
@@ -293,12 +548,14 @@ export function LearnerAIBitacoraAssistant({
     );
     const unsubscribeProjects = escucharProyectos(setProjects, handleError);
     const unsubscribeGroups = escucharGruposTrabajo(setGroups, handleError);
+    const unsubscribeBitacoras = escucharBitacorasAprendiz(session.uid, setLearnerBitacoras, handleError);
 
     return () => {
       unsubscribeContext?.();
       unsubscribeProjects?.();
       unsubscribeGroups?.();
-      Speech.stop();
+      unsubscribeBitacoras?.();
+      void stopTextToSpeech();
     };
   }, [session]);
 
@@ -342,8 +599,25 @@ export function LearnerAIBitacoraAssistant({
     () => assignedProjects.find((project) => project.id === selectedProjectId) || null,
     [assignedProjects, selectedProjectId]
   );
+  const previousProjectBitacoras = useMemo(
+    () => learnerBitacoras
+      .filter((bitacora) => bitacora.proyectoId === selectedProject?.id)
+      .slice(0, 5),
+    [learnerBitacoras, selectedProject?.id]
+  );
+  const speechVocabulary = useMemo(() => Array.from(new Set([
+    ...biotechnologyVocabulary,
+    selectedProject?.titulo || '',
+    selectedProject?.competenciaNombre || '',
+    selectedProject?.rapDescripcion || '',
+    ...String(selectedProject?.descripcion || '').split(/[,.;:\n]/g),
+  ].map((item) => item.trim()).filter((item) => item.length >= 3))).slice(0, 80), [selectedProject]);
   const conversationStorageKey = useMemo(
-    () => selectedProject ? `biomind:learner-ai:${session.uid}:${selectedProject.id}` : '',
+    () => selectedProject ? `biomind:learner-ai:v3:${session.uid}:${selectedProject.id}` : '',
+    [selectedProject?.id, session.uid]
+  );
+  const practiceStorageKey = useMemo(
+    () => selectedProject ? `biomind:hands-free-session:v3:${session.uid}:${selectedProject.id}` : '',
     [selectedProject?.id, session.uid]
   );
   const activeConversation = useMemo(
@@ -371,48 +645,37 @@ export function LearnerAIBitacoraAssistant({
     }, ...conversations];
   }, [activeConversationId, conversationTitle, conversations, messages]);
 
-  const speakAssistantText = (text: string, messageId = '', force = false) => {
+  const speakAssistantText = async (text: string, messageId = '', force = false) => {
     const cleanText = cleanSpeechText(text);
 
     if ((!speechEnabled && !force) || !cleanText) {
       return;
     }
 
-    Speech.stop();
     setSpeakingMessageId(messageId);
-    Speech.speak(cleanText, {
-      language: 'es-CO',
-      pitch: 1,
-      rate: 0.92,
-      onDone: () => {
-        setSpeakingMessageId('');
-      },
-      onError: () => {
-        setSpeakingMessageId('');
-      },
-      onStopped: () => setSpeakingMessageId(''),
-    });
+    await speakText(cleanText, { language: 'es-CO', rate: 0.98 });
+    setSpeakingMessageId('');
   };
 
   const toggleSpeech = (enabled: boolean) => {
     setSpeechEnabled(enabled);
 
     if (!enabled) {
-      Speech.stop();
+      void stopTextToSpeech();
       setSpeakingMessageId('');
       return;
     }
 
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
     if (lastAssistantMessage) {
-      speakAssistantText(lastAssistantMessage.text, lastAssistantMessage.id, true);
+      void speakAssistantText(lastAssistantMessage.text, lastAssistantMessage.id, true);
     }
   };
 
   useEffect(() => {
     setSpeechEnabled(voiceSuggestionsEnabled);
     if (!voiceSuggestionsEnabled) {
-      Speech.stop();
+      void stopTextToSpeech();
       setSpeakingMessageId('');
     }
   }, [voiceSuggestionsEnabled]);
@@ -436,9 +699,10 @@ export function LearnerAIBitacoraAssistant({
     const firstMessage = {
       id: buildMessageId('assistant'),
       role: 'assistant' as const,
-      text: getFieldQuestion('fecha', selectedProject.titulo || 'este proyecto', firstDate),
+      text: getSessionWelcome(selectedProject.titulo || 'este proyecto'),
     };
     const resetForm = {
+      nombre: '',
       archivoNombre: '',
       archivoUrl: '',
       avance: '',
@@ -455,6 +719,11 @@ export function LearnerAIBitacoraAssistant({
     setExtraAnswers([]);
     setCurrentExtraQuestion('');
     setAwaitingExtraConsent(false);
+    setShowFullConversation(false);
+    setCompanionMode(null);
+    setAssistantQuestionsEnabled(false);
+    setPracticeMemory(emptyPracticeMemory);
+    practiceMemoryRef.current = emptyPracticeMemory;
     setForm(resetForm);
 
     AsyncStorage.getItem(conversationStorageKey)
@@ -462,7 +731,16 @@ export function LearnerAIBitacoraAssistant({
         if (cancelled) return;
 
         const parsed = storedValue ? JSON.parse(storedValue) : [];
-        const storedConversations: AssistantConversation[] = Array.isArray(parsed) ? parsed : [];
+        const storedConversations: AssistantConversation[] = Array.isArray(parsed)
+          ? parsed.map((conversation: AssistantConversation) => ({
+            ...conversation,
+            messages: (conversation.messages || []).map((message, index) =>
+              index === 0 && message.role === 'assistant' && /fecha está como|formato AAAA/i.test(message.text)
+                ? { ...message, text: firstMessage.text }
+                : message
+            ),
+          }))
+          : [];
 
         if (storedConversations.length) {
           const firstConversation = storedConversations[0];
@@ -484,7 +762,7 @@ export function LearnerAIBitacoraAssistant({
         setConversations([initialConversation]);
         setActiveConversationId(initialConversation.id);
         setMessages(initialConversation.messages);
-        speakAssistantText(firstMessage.text, firstMessage.id);
+        void speakAssistantText(firstMessage.text, firstMessage.id);
         void AsyncStorage.setItem(conversationStorageKey, JSON.stringify([initialConversation]));
       })
       .catch(() => {
@@ -492,7 +770,7 @@ export function LearnerAIBitacoraAssistant({
         setConversations([]);
         setActiveConversationId(buildConversationId());
         setMessages([firstMessage]);
-        speakAssistantText(firstMessage.text, firstMessage.id);
+        void speakAssistantText(firstMessage.text, firstMessage.id);
       })
       .finally(() => {
         if (!cancelled) {
@@ -504,6 +782,42 @@ export function LearnerAIBitacoraAssistant({
       cancelled = true;
     };
   }, [conversationStorageKey, selectedProject?.id]);
+
+  useEffect(() => {
+    if (!practiceStorageKey) return;
+    let cancelled = false;
+    hydratedPracticeKeyRef.current = '';
+    AsyncStorage.getItem(practiceStorageKey)
+      .then((storedValue) => {
+        if (cancelled || !storedValue) return;
+        const stored = JSON.parse(storedValue) as {
+          form?: Partial<FormState>;
+          assistantQuestionsEnabled?: boolean;
+          companionMode?: 'automatic' | 'on-demand' | null;
+          practiceMemory?: Partial<PracticeMemory>;
+        };
+        if (stored.form) setForm((current) => ({ ...current, ...stored.form, evidencias: stored.form?.evidencias || current.evidencias }));
+        if (typeof stored.assistantQuestionsEnabled === 'boolean') setAssistantQuestionsEnabled(stored.assistantQuestionsEnabled);
+        if (stored.companionMode === 'automatic' || stored.companionMode === 'on-demand') setCompanionMode(stored.companionMode);
+        if (stored.practiceMemory) setPracticeMemory({ ...emptyPracticeMemory, ...stored.practiceMemory });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) hydratedPracticeKeyRef.current = practiceStorageKey;
+      });
+    return () => { cancelled = true; };
+  }, [practiceStorageKey]);
+
+  useEffect(() => {
+    if (!practiceStorageKey || hydratedPracticeKeyRef.current !== practiceStorageKey) return;
+    void AsyncStorage.setItem(practiceStorageKey, JSON.stringify({
+      assistantQuestionsEnabled,
+      companionMode,
+      form,
+      practiceMemory,
+      updatedAt: new Date().toISOString(),
+    }));
+  }, [assistantQuestionsEnabled, companionMode, form, practiceMemory, practiceStorageKey]);
 
   const persistConversationMessages = (nextMessages: AssistantMessage[]) => {
     if (!conversationStorageKey || !activeConversationId) return;
@@ -545,7 +859,7 @@ export function LearnerAIBitacoraAssistant({
         })),
         systemInstruction: 'Crea un título de máximo cinco palabras para esta conversación. Devuelve únicamente el título, sin comillas ni puntuación final.',
       });
-      generatedTitle = result.replace(/["“”.'\n]/g, '').trim().slice(0, 52) || fallback;
+      generatedTitle = result.replace(/[*_`#>"“”.'\n]/g, '').replace(/\s+/g, ' ').trim().slice(0, 42) || fallback;
     } catch {
       // The local fallback still produces a useful title when Gemini is unavailable.
     }
@@ -577,7 +891,7 @@ export function LearnerAIBitacoraAssistant({
     });
 
     if (nextMessage.role === 'assistant' && shouldSpeak) {
-      speakAssistantText(nextMessage.text, nextMessage.id);
+      void speakAssistantText(nextMessage.text, nextMessage.id);
     }
 
     return nextMessage;
@@ -590,7 +904,7 @@ export function LearnerAIBitacoraAssistant({
     const firstMessage = {
       id: buildMessageId('assistant'),
       role: 'assistant' as const,
-      text: getFieldQuestion('fecha', selectedProject.titulo || 'este proyecto', firstDate),
+      text: getSessionWelcome(selectedProject.titulo || 'este proyecto'),
     };
     const nextConversation: AssistantConversation = {
       id: buildConversationId(),
@@ -611,7 +925,13 @@ export function LearnerAIBitacoraAssistant({
     setExtraAnswers([]);
     setCurrentExtraQuestion('');
     setAwaitingExtraConsent(false);
+    setShowFullConversation(false);
+    setCompanionMode(null);
+    setAssistantQuestionsEnabled(false);
+    setPracticeMemory(emptyPracticeMemory);
+    practiceMemoryRef.current = emptyPracticeMemory;
     setForm({
+      nombre: '',
       archivoNombre: '',
       archivoUrl: '',
       avance: '',
@@ -620,7 +940,7 @@ export function LearnerAIBitacoraAssistant({
       evidencias: [],
       fecha: firstDate,
     });
-    speakAssistantText(firstMessage.text, firstMessage.id);
+    void speakAssistantText(firstMessage.text, firstMessage.id);
     void AsyncStorage.setItem(conversationStorageKey, JSON.stringify(nextConversations));
   };
 
@@ -629,6 +949,7 @@ export function LearnerAIBitacoraAssistant({
     setMessages(conversation.messages?.length ? conversation.messages : []);
     setDraft('');
     setFeedback('');
+    setShowFullConversation(false);
   };
 
   const deleteConversation = (conversation: AssistantConversation) => {
@@ -646,7 +967,7 @@ export function LearnerAIBitacoraAssistant({
               const firstMessage: AssistantMessage = {
                 id: buildMessageId('assistant'),
                 role: 'assistant',
-                text: getFieldQuestion('fecha', selectedProject.titulo || 'este proyecto', today()),
+                text: getSessionWelcome(selectedProject.titulo || 'este proyecto'),
               };
               remaining = [{
                 id: buildConversationId(),
@@ -681,15 +1002,6 @@ export function LearnerAIBitacoraAssistant({
     completedForm: FormState,
     options: { speak?: boolean } = {}
   ) => {
-    if (autoSaveEnabled && completedForm.descripcion.trim() && completedForm.avance.trim()) {
-      const text = 'Ya tengo los campos principales. Guardaré la bitácora automáticamente porque lo activaste en tu perfil.';
-      pushMessage({ role: 'assistant', text }, options);
-      setTimeout(() => {
-        void saveBitacora();
-      }, 0);
-      return text;
-    }
-
     if (assistantQuestionsEnabled) {
       setAwaitingExtraConsent(false);
       return askGeminiFollowUp(options, completedForm, []);
@@ -755,7 +1067,7 @@ export function LearnerAIBitacoraAssistant({
       const fallback = fallbackFollowUpQuestion(answerSnapshot.length);
       setCurrentExtraQuestion(fallback);
       setAwaitingExtraConsent(false);
-      setFeedback(mapGeminiError(error));
+      setFeedback('');
       pushMessage({ role: 'assistant', text: fallback }, options);
       return fallback;
     } finally {
@@ -786,7 +1098,12 @@ export function LearnerAIBitacoraAssistant({
     setFeedback('');
 
     try {
+      const priorTechnicalHistory: WorkspaceChatMessage[] = messages
+        .slice(-10)
+        .filter((message) => message.role === 'assistant' || parseLabVoiceIntent(message.text).type === 'technical-question')
+        .map((message) => ({ id: message.id, role: message.role === 'assistant' ? 'model' as const : 'user' as const, text: message.text }));
       const history: WorkspaceChatMessage[] = [
+        ...priorTechnicalHistory,
         {
           id: 'project-question',
           role: 'user',
@@ -798,18 +1115,29 @@ export function LearnerAIBitacoraAssistant({
         systemInstruction: [
           'Eres BIOMIND IA para aprendices de biotecnología vegetal.',
           'Responde dudas sobre el proyecto seleccionado con orientación académica, clara y breve.',
+          'Interpreta errores fonéticos evidentes del reconocimiento de voz según el contexto antes de responder.',
+          'Responde en máximo dos frases salvo que el aprendiz pida más detalle.',
+          'Distingue la información del proyecto del conocimiento general. Si el dato no está confirmado en el proyecto, dilo.',
+          'No inventes concentraciones, tiempos, sustancias ni protocolos; ante riesgo, indica que debe confirmarlo con el instructor.',
           `Proyecto: ${selectedProject.titulo || 'Proyecto'}.`,
           `Descripción: ${selectedProject.descripcion || 'No registrada'}.`,
           `Competencia: ${selectedProject.competenciaNombre || 'No registrada'}.`,
           `RAP: ${selectedProject.rapDescripcion || 'No registrado'}.`,
+          `Bitácoras anteriores del aprendiz: ${previousProjectBitacoras.length
+            ? previousProjectBitacoras.map((item) => `${item.nombre || item.fecha || 'Sin nombre'}: ${item.descripcion || 'sin descripción'}; avance ${item.avance || 'no registrado'}`).join(' | ')
+            : 'No hay bitácoras anteriores para este proyecto'}.`,
         ].join(' '),
       });
 
       pushMessage({ role: 'assistant', text: answer }, options);
       return answer;
     } catch (error) {
-      setFeedback(mapGeminiError(error));
-      const fallback = 'No pude responder con Gemini ahora. Puedes seguir usando el micrófono para transcribir tu bitácora.';
+      setFeedback('');
+      const previousQuestion = [...messages]
+        .reverse()
+        .find((message) => message.role === 'user' && parseLabVoiceIntent(message.text).type === 'technical-question')?.text || '';
+      const isEllipticalFollowUp = /^(?:y|entonces|eso|esa|ese|por que|por qué)\b/i.test(question.trim()) && question.trim().split(/\s+/).length < 10;
+      const fallback = getTechnicalSafetyFallback(isEllipticalFollowUp ? `${question} ${previousQuestion}` : question);
       pushMessage({
         role: 'assistant',
         text: fallback,
@@ -820,6 +1148,54 @@ export function LearnerAIBitacoraAssistant({
     }
   };
 
+  const registerPracticeNote = async (note: string, options: { speak?: boolean } = {}) => {
+    if (!selectedProject) return '';
+    setLoading(true);
+    setFeedback('Interpretando la anotación...');
+    const safeMemory = removeQuestionsFromMemory(practiceMemoryRef.current);
+    const deterministicMemory = applyLocalMemoryUpdate(safeMemory, note);
+    const nextMemory = removeQuestionsFromMemory(deterministicMemory);
+    setLoading(false);
+
+    setPracticeMemory(nextMemory);
+    practiceMemoryRef.current = nextMemory;
+    setForm((current) => memoryToForm(nextMemory, current, selectedProject.titulo || 'Práctica'));
+    const confirmation = getUpdatedMemoryLabel(safeMemory, nextMemory);
+    const nextQuestion = assistantQuestionsEnabled ? getNextMemoryQuestion(nextMemory) : '';
+    const responseText = [confirmation, nextQuestion].filter(Boolean).join(' ');
+    setFeedback('');
+    pushMessage({ role: 'assistant', text: responseText }, options);
+    return responseText;
+  };
+
+  const prepareBitacoraFromConversation = async (options: { speak?: boolean } = {}) => {
+    if (!selectedProject) return '';
+    const safeMemory = removeQuestionsFromMemory(practiceMemoryRef.current);
+    if (JSON.stringify(safeMemory) !== JSON.stringify(practiceMemoryRef.current)) {
+      setPracticeMemory(safeMemory);
+      practiceMemoryRef.current = safeMemory;
+    }
+    const memoryForm = memoryToForm(safeMemory, form, selectedProject.titulo || 'Práctica');
+    const nextForm: FormState = memoryForm;
+    setForm(nextForm);
+    setShowBitacoraDetails(true);
+
+    const missingField = (['nombre', 'descripcion', 'avance', 'dificultades'] as FieldKey[])
+      .find((field) => !normalizeText(nextForm[field]));
+    if (missingField) {
+      setAwaitingRequiredField(missingField);
+      setActiveField(missingField);
+      const question = getFieldQuestion(missingField, selectedProject.titulo || 'este proyecto', nextForm.fecha);
+      pushMessage({ role: 'assistant', text: question }, options);
+      return question;
+    }
+
+    setAwaitingSaveConfirmation(true);
+    const summary = `Preparé “${nextForm.nombre}”. Registré la actividad, el avance${nextForm.dificultades ? ' y las dificultades' : ''}. ¿La guardo?`;
+    pushMessage({ role: 'assistant', text: summary }, options);
+    return summary;
+  };
+
   const handleSend = async (
     inputMode: 'manual' | 'voice' = 'manual',
     textOverride?: string,
@@ -828,13 +1204,111 @@ export function LearnerAIBitacoraAssistant({
     const text = (textOverride ?? draft).trim();
     if (!text || !selectedProject) return '';
 
+    const labIntent = parseLabVoiceIntent(text);
+    if (labIntent.type === 'cancel-last') {
+      const removableIndex = [...messages]
+        .map((message, index) => ({ index, message }))
+        .reverse()
+        .find(({ message }) => message.role === 'user' && parseLabVoiceIntent(message.text).type === 'practice-note')?.index;
+      if (typeof removableIndex !== 'number') {
+        const responseText = 'No hay una anotación anterior para eliminar.';
+        pushMessage({ role: 'assistant', text: responseText }, options);
+        return responseText;
+      }
+      const nextMessages = messages.filter((_, index) => index !== removableIndex);
+      setMessages(nextMessages);
+      persistConversationMessages(nextMessages);
+      const responseText = 'Eliminé la última anotación.';
+      pushMessage({ role: 'assistant', text: responseText }, options);
+      return responseText;
+    }
+
     pushMessage({ role: 'user', text, mode: inputMode });
     setDraft('');
 
-    if (isSaveCommand(text)) {
+    if (labIntent.type === 'finish-session') {
+      const responseText = 'Conversación finalizada. Tus anotaciones permanecen disponibles para preparar la bitácora.';
+      pushMessage({ role: 'assistant', text: responseText }, options);
+      setTimeout(() => voiceConversation.stopConversation(), 300);
+      return responseText;
+    }
+
+    if (labIntent.type === 'choose-companion') {
+      const automatic = labIntent.mode === 'automatic';
+      setCompanionMode(labIntent.mode);
+      setAssistantQuestionsEnabled(automatic);
+      const responseText = automatic
+        ? 'Acompañamiento automático activado. Cuéntame cuando inicies una actividad.'
+        : 'Modo bajo demanda activado. Te escucharé sin interrumpir.';
+      pushMessage({ role: 'assistant', text: responseText }, options);
+      return responseText;
+    }
+
+    if (inputMode === 'voice' && !companionMode) {
+      const responseText = 'Antes de continuar, dime “acompañamiento automático” o “solo cuando te necesite”.';
+      pushMessage({ role: 'assistant', text: responseText }, options);
+      return responseText;
+    }
+
+    if (labIntent.type === 'technical-question') {
+      return askProjectQuestion(text, options);
+    }
+
+    if (labIntent.type === 'read-summary') {
+      const safeMemory = removeQuestionsFromMemory(practiceMemoryRef.current);
+      if (JSON.stringify(safeMemory) !== JSON.stringify(practiceMemoryRef.current)) {
+        setPracticeMemory(safeMemory);
+        practiceMemoryRef.current = safeMemory;
+      }
+      const responseText = buildPracticeSummary(safeMemory);
+      pushMessage({ role: 'assistant', text: responseText }, options);
+      return responseText;
+    }
+
+    if (labIntent.type === 'create-bitacora') {
       setAwaitingExtraConsent(false);
       setCurrentExtraQuestion('');
-      return saveBitacora(options);
+      return prepareBitacoraFromConversation(options);
+    }
+
+    if (labIntent.type === 'save-bitacora') {
+      if (!form.nombre.trim() || !form.descripcion.trim() || !form.avance.trim() || !form.dificultades.trim()) {
+        return prepareBitacoraFromConversation(options);
+      }
+      setAwaitingSaveConfirmation(true);
+      const responseText = `¿Confirmas que quieres guardar “${form.nombre}”?`;
+      pushMessage({ role: 'assistant', text: responseText }, options);
+      return responseText;
+    }
+
+    if (awaitingSaveConfirmation) {
+      if (isYes(text)) {
+        setAwaitingSaveConfirmation(false);
+        return saveBitacora(options);
+      }
+      if (isNo(text)) {
+        setAwaitingSaveConfirmation(false);
+        const responseText = 'De acuerdo. Dime qué quieres corregir y lo registraré antes de volver a preparar la bitácora.';
+        pushMessage({ role: 'assistant', text: responseText }, options);
+        return responseText;
+      }
+    }
+
+    if (awaitingRequiredField) {
+      const nextForm = applyFieldValue(awaitingRequiredField, text, form);
+      setForm(nextForm);
+      setAwaitingRequiredField(null);
+      const nextMissing = (['nombre', 'descripcion', 'avance', 'dificultades'] as FieldKey[])
+        .find((field) => !normalizeText(nextForm[field]));
+      if (nextMissing) {
+        setAwaitingRequiredField(nextMissing);
+        setActiveField(nextMissing);
+        return askNextField(nextMissing, options);
+      }
+      setAwaitingSaveConfirmation(true);
+      const responseText = `Ya está completa “${nextForm.nombre}”. ¿La guardo?`;
+      pushMessage({ role: 'assistant', text: responseText }, options);
+      return responseText;
     }
 
     if (awaitingExtraConsent) {
@@ -844,18 +1318,7 @@ export function LearnerAIBitacoraAssistant({
 
       if (isNo(text)) {
         setAwaitingExtraConsent(false);
-        if (autoSaveEnabled && form.descripcion.trim() && form.avance.trim()) {
-          const responseText = 'Listo. Guardaré la bitácora automáticamente porque lo activaste en tu perfil.';
-          pushMessage({
-            role: 'assistant',
-            text: responseText,
-          }, options);
-          setTimeout(() => {
-            void saveBitacora();
-          }, 0);
-          return responseText;
-        }
-        const responseText = 'Listo. Revisa el resumen y toca "Crear bitácora" para guardarla.';
+        const responseText = 'Listo. Di “crear bitácora” para organizar la información y confirmar antes de guardarla.';
         pushMessage({
           role: 'assistant',
           text: responseText,
@@ -875,18 +1338,18 @@ export function LearnerAIBitacoraAssistant({
       return answerExtraQuestion(text, options);
     }
 
-    if (assistantQuestionsEnabled) {
-      return advanceGuidedFlow(activeField, text, options);
+    if (inputMode === 'voice') {
+      const wordCount = text.split(/\s+/).filter(Boolean).length;
+      if (wordCount <= 2 && !/^(?:sin dificultades|sin novedad(?:es)?)$/i.test(text)) {
+        const responseText = 'No alcancé a entender esa anotación. Repítela con una frase completa para no guardar un dato incorrecto.';
+        pushMessage({ role: 'assistant', text: responseText }, options);
+        return responseText;
+      }
+      return registerPracticeNote(text, options);
     }
 
-    if (inputMode === 'voice') {
-      setForm((current) => applyFieldValue(activeField, text, current));
-      const responseText = `Transcripción guardada en "${fieldLabels[activeField]}".`;
-      pushMessage({
-        role: 'assistant',
-        text: responseText,
-      }, options);
-      return responseText;
+    if (assistantQuestionsEnabled) {
+      return registerPracticeNote(text, options);
     }
 
     return askProjectQuestion(text, options);
@@ -916,26 +1379,41 @@ export function LearnerAIBitacoraAssistant({
 
   const voiceConversation = useVoiceConversation({
     canStart: Boolean(selectedProject),
+    confirmBeforeSend: false,
+    contextualStrings: speechVocabulary,
     language: 'es-CO',
-    onSendMessage: (text) => handleSend('voice', text, { speak: false }),
-    silenceMs: 1500,
+    onSendMessage: (text) => {
+      const correctedText = correctBiotechnologyTranscript(text);
+      const turns = splitEmbeddedVoiceCommand(correctedText);
+      return turns.reduce<Promise<string>>(async (previous, turn) => {
+        await previous;
+        return handleSend('voice', turn, { speak: false });
+      }, Promise.resolve(''));
+    },
+    silenceMs: 2300,
     speechEnabled,
   });
 
   useEffect(() => {
     if (!autoStartVoiceSignal || !selectedProject || voiceConversation.isConversationActive) return;
-    void voiceConversation.startConversation();
+    setCompanionMode(null);
+    setAssistantQuestionsEnabled(false);
+    setSpeechEnabled(true);
+    void voiceConversation.startConversation(getSessionWelcome(selectedProject.titulo || 'este proyecto'));
   }, [autoStartVoiceSignal, selectedProject?.id, voiceConversation.isConversationActive]);
 
   const toggleGuidedMode = (enabled: boolean) => {
     setAssistantQuestionsEnabled(enabled);
+    setCompanionMode(enabled ? 'automatic' : 'on-demand');
     setAwaitingExtraConsent(false);
     setCurrentExtraQuestion('');
     setFeedback('');
 
     if (enabled) {
-      const nextField = guidedOrder.find((field) => !normalizeText(form[field])) || activeField;
-      askNextField(nextField, { speak: true });
+      pushMessage({
+        role: 'assistant',
+        text: 'Acompañamiento automático activado. Cuéntame cuando inicies una actividad.',
+      }, { speak: true });
       return;
     }
 
@@ -1034,6 +1512,12 @@ export function LearnerAIBitacoraAssistant({
       return message;
     }
 
+    if (!form.nombre.trim()) {
+      const message = 'Aún falta el nombre de la bitácora.';
+      setFeedback(message);
+      return message;
+    }
+
     if (!form.descripcion.trim()) {
       const message = 'Aún falta la actividad realizada antes de guardar.';
       setFeedback(message);
@@ -1060,6 +1544,7 @@ export function LearnerAIBitacoraAssistant({
 
     try {
       await guardarBitacora({
+        nombre: form.nombre,
         aprendizUid: session.uid,
         aprendizNombre: session.name,
         archivoNombre: form.archivoNombre,
@@ -1076,6 +1561,7 @@ export function LearnerAIBitacoraAssistant({
       });
 
       const successMessage = 'Bitácora guardada correctamente. Puedes verla en Bitácoras y evidencias.';
+      void playVoiceCue('success');
       setFeedback(successMessage);
       pushMessage({
         role: 'assistant',
@@ -1084,10 +1570,35 @@ export function LearnerAIBitacoraAssistant({
       setExtraAnswers([]);
       setCurrentExtraQuestion('');
       setAwaitingExtraConsent(false);
+      setAwaitingRequiredField(null);
+      setAwaitingSaveConfirmation(false);
+      const cleanForm: FormState = {
+        nombre: '',
+        archivoNombre: '',
+        archivoUrl: '',
+        avance: '',
+        descripcion: '',
+        dificultades: '',
+        evidencias: [],
+        fecha: today(),
+      };
+      setForm(cleanForm);
+      setPracticeMemory(emptyPracticeMemory);
+      practiceMemoryRef.current = emptyPracticeMemory;
+      if (practiceStorageKey) {
+        void AsyncStorage.setItem(practiceStorageKey, JSON.stringify({
+          assistantQuestionsEnabled,
+          companionMode,
+          form: cleanForm,
+          practiceMemory: emptyPracticeMemory,
+          updatedAt: new Date().toISOString(),
+        }));
+      }
       return successMessage;
     } catch (error) {
       const typedError = error as { message?: string };
       const errorMessage = typedError?.message || 'No pudimos guardar la bitácora.';
+      void playVoiceCue('error');
       setFeedback(errorMessage);
       return errorMessage;
     } finally {
@@ -1100,7 +1611,7 @@ export function LearnerAIBitacoraAssistant({
       <View style={styles.heroCard}>
         <View style={styles.heroBadge}>
           <MaterialCommunityIcons name="robot-outline" size={14} color="#FFFFFF" />
-          <Text style={styles.heroBadgeText}>Aprendiz IA</Text>
+          <Text style={styles.heroBadgeText}>Manos Libres · Nueva IA</Text>
         </View>
 
         <Text style={styles.heroTitle}>Asistente IA del aprendiz</Text>
@@ -1210,7 +1721,12 @@ export function LearnerAIBitacoraAssistant({
               onPress={
                 voiceConversation.isConversationActive
                   ? voiceConversation.stopConversation
-                  : voiceConversation.startConversation
+                  : () => {
+                    setCompanionMode(null);
+                    setAssistantQuestionsEnabled(false);
+                    setSpeechEnabled(true);
+                    void voiceConversation.startConversation(getSessionWelcome(selectedProject.titulo || 'este proyecto'));
+                  }
               }
             />
             {voiceConversation.isConversationActive || voiceConversation.status === 'error' || voiceConversation.partialTranscript ? (
@@ -1243,6 +1759,7 @@ export function LearnerAIBitacoraAssistant({
 
           {showBitacoraDetails ? <>
           <View style={styles.formPreview}>
+            <FieldPreview active={activeField === 'nombre'} label="Nombre" value={form.nombre} onPress={() => setActiveField('nombre')} />
             <FieldPreview active={activeField === 'fecha'} label="Fecha" value={form.fecha} onPress={() => setActiveField('fecha')} />
             <FieldPreview active={activeField === 'descripcion'} label="Actividad realizada" value={form.descripcion} onPress={() => setActiveField('descripcion')} />
             <FieldPreview active={activeField === 'avance'} label="Avance alcanzado" value={form.avance} onPress={() => setActiveField('avance')} />
@@ -1343,7 +1860,7 @@ export function LearnerAIBitacoraAssistant({
           </> : null}
 
           <View style={styles.chatCard}>
-            <View style={styles.conversationPanel}>
+            {showFullConversation ? <View style={styles.conversationPanel}>
               <View style={styles.conversationHeader}>
                 <View style={styles.conversationCopy}>
                   <Text style={styles.conversationLabel}>Conversaciones</Text>
@@ -1381,16 +1898,16 @@ export function LearnerAIBitacoraAssistant({
                   );
                 })}
               </ScrollView>
-            </View>
+            </View> : null}
             <View style={styles.chatHeader}>
-              <Text style={styles.chatTitle}>{conversationTitle}</Text>
-              {messages.length > 4 ? (
-                <Pressable onPress={() => setShowFullConversation((current) => !current)}>
-                  <Text style={styles.historyToggleText}>
-                    {showFullConversation ? 'Ver recientes' : `Ver todo (${messages.length})`}
-                  </Text>
-                </Pressable>
-              ) : null}
+              <View style={styles.chatHeaderCopy}>
+                <Text style={styles.chatTitle}>Conversación actual</Text>
+                <Text numberOfLines={1} style={styles.chatSubtitle}>{conversationTitle}</Text>
+              </View>
+              <Pressable onPress={() => setShowFullConversation((current) => !current)} style={styles.historyButton}>
+                <MaterialCommunityIcons name={showFullConversation ? 'close' : 'history'} size={16} color={learnerPalette.primary} />
+                <Text style={styles.historyToggleText}>{showFullConversation ? 'Cerrar' : 'Historial'}</Text>
+              </Pressable>
             </View>
             <View style={styles.messageList}>
               {loadingConversations ? (
@@ -1399,7 +1916,7 @@ export function LearnerAIBitacoraAssistant({
                   <Text style={styles.loadingText}>Cargando conversaciones...</Text>
                 </View>
               ) : null}
-              {(showFullConversation ? messages : messages.slice(-4)).map((message) => (
+              {(showFullConversation ? messages : messages.slice(-6)).map((message) => (
                 <View
                   key={message.id}
                   style={[
@@ -1435,7 +1952,7 @@ export function LearnerAIBitacoraAssistant({
                       />
                     )}
                     {message.role === 'assistant' ? (
-                      <Pressable onPress={() => speakAssistantText(message.text, message.id, true)} style={styles.replayButton}>
+                      <Pressable onPress={() => void speakAssistantText(message.text, message.id, true)} style={styles.replayButton}>
                         <MaterialCommunityIcons
                           name={speakingMessageId === message.id ? 'volume-high' : 'volume-medium'}
                           size={15}
@@ -1467,7 +1984,7 @@ export function LearnerAIBitacoraAssistant({
               multiline
               placeholder={
                 voiceConversation.isConversationActive
-                  ? 'Te escucho. Confirmarás antes de enviar...'
+                  ? 'Te escucho durante toda la sesión...'
                   : assistantQuestionsEnabled
                     ? 'Responde a la pregunta de BIOMIND IA...'
                     : 'Escribe una duda del proyecto o inicia la conversación por voz...'
@@ -1479,7 +1996,7 @@ export function LearnerAIBitacoraAssistant({
             />
             <View style={styles.composerFooter}>
               <Text style={styles.composerHint}>
-                Biomind repetirá lo escuchado. Di sí para enviar o no para corregir.
+                Di “crear bitácora”, “guardar bitácora” o “finalizar sesión”.
               </Text>
               <View style={styles.actionsRow}>
                 <Pressable
@@ -2012,11 +2529,31 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingBottom: 12,
   },
+  chatHeaderCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
   chatTitle: {
     color: learnerPalette.primary,
     fontFamily: 'PoppinsSemiBold',
     fontSize: 17,
     lineHeight: 23,
+  },
+  chatSubtitle: {
+    color: learnerPalette.textMuted,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 11,
+  },
+  historyButton: {
+    alignItems: 'center',
+    backgroundColor: learnerPalette.mint,
+    borderRadius: 999,
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   chatMeta: {
     color: learnerPalette.textMuted,
@@ -2143,7 +2680,7 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     elevation: 3,
     gap: 8,
-    marginBottom: -30,
+    marginBottom: 0,
     marginHorizontal: -30,
     marginTop: 16,
     paddingHorizontal: 30,

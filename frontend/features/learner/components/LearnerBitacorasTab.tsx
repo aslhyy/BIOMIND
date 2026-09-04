@@ -14,6 +14,7 @@ import { eliminarBitacora, escucharBitacoras, guardarBitacora } from '@/services
 
 type Props = {
   session: AuthenticatedSession;
+  focus?: { bitacoraId?: string; projectId?: string };
 };
 
 type Instructor = {
@@ -75,6 +76,7 @@ type Evidence = {
 
 type Bitacora = {
   id: string;
+  nombre?: string;
   aprendizUid: string;
   aprendizNombre: string;
   proyectoId: string;
@@ -94,6 +96,7 @@ type Bitacora = {
 };
 
 type FormState = {
+  nombre: string;
   descripcion: string;
   fecha: string;
   avance: string;
@@ -104,6 +107,7 @@ type FormState = {
 };
 
 const emptyForm = (): FormState => ({
+  nombre: '',
   descripcion: '',
   fecha: new Date().toISOString().slice(0, 10),
   avance: '',
@@ -113,7 +117,7 @@ const emptyForm = (): FormState => ({
   archivoUrl: '',
 });
 
-export function LearnerBitacorasTab({ session }: Props) {
+export function LearnerBitacorasTab({ focus, session }: Props) {
   const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [learners, setLearners] = useState<Learner[]>([]);
   const [learnerSheets, setLearnerSheets] = useState<{ id: string; numero: string }[]>([]);
@@ -284,6 +288,15 @@ export function LearnerBitacorasTab({ session }: Props) {
   );
 
   useEffect(() => {
+    if (!focus?.projectId || !assignedProjects.length) return;
+    const project = assignedProjects.find((item) => item.id === focus.projectId);
+    if (!project) return;
+    setSelectedInstructorId(project.instructorUid || '');
+    setSelectedProjectId(project.id || '');
+    if (focus.bitacoraId) setExpandedObservationIds((current) => current.includes(focus.bitacoraId!) ? current : [...current, focus.bitacoraId!]);
+  }, [assignedProjects, focus?.bitacoraId, focus?.projectId]);
+
+  useEffect(() => {
     if (selectedInstructorId && assignedInstructorIds.has(selectedInstructorId)) {
       return;
     }
@@ -447,6 +460,7 @@ export function LearnerBitacorasTab({ session }: Props) {
         proyectoTitulo: selectedProject.titulo || 'Proyecto',
         fichaId: selectedProject.fichaId || session.fichaId || session.ficha || '',
         descripcion: form.descripcion,
+        nombre: form.nombre,
         fecha: form.fecha,
         avance: form.avance,
         dificultades: form.dificultades,
@@ -472,6 +486,7 @@ export function LearnerBitacorasTab({ session }: Props) {
     const bitacoraDate = parseDate(bitacora.fecha) || new Date();
     setEditingId(bitacora.id);
     setForm({
+      nombre: bitacora.nombre || '',
       descripcion: bitacora.descripcion || '',
       fecha: bitacora.fecha || new Date().toISOString().slice(0, 10),
       avance: bitacora.avance || '',
@@ -603,6 +618,13 @@ export function LearnerBitacorasTab({ session }: Props) {
                 </Pressable>
               </View>
 
+              <Field
+                label="Nombre de la bitácora"
+                placeholder="Ejemplo: Seguimiento de germinación"
+                value={form.nombre}
+                onChangeText={(value) => updateField('nombre', value)}
+              />
+
               <View style={styles.fieldBlock}>
                 <Text style={styles.fieldLabel}>Fecha</Text>
                 <Pressable
@@ -703,7 +725,8 @@ export function LearnerBitacorasTab({ session }: Props) {
               <View key={bitacora.id} style={styles.bitacoraCard}>
                 <View style={styles.cardHeader}>
                   <View style={styles.cardCopy}>
-                    <Text style={styles.cardTitle}>{bitacora.fecha || 'Sin fecha'}</Text>
+                    <Text style={styles.cardTitle}>{bitacora.nombre || 'Bitácora sin nombre'}</Text>
+                    <Text style={styles.cardMeta}>{bitacora.fecha || 'Sin fecha'}</Text>
                     {selectedProjectIsGroup ? (
                       <>
                         <Text style={styles.cardMeta}>Publicada por {bitacora.aprendizNombre || 'integrante del grupo'}</Text>

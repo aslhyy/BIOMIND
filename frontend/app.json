@@ -65,7 +65,8 @@
           "speechRecognitionPermission": "Permite convertir tu voz en texto para enviar mensajes al chat de Biomind IA."
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true,

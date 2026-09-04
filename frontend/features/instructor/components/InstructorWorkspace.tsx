@@ -37,6 +37,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
   const [showHomeNews, setShowHomeNews] = useState(true);
   const [showHomeProjects, setShowHomeProjects] = useState(true);
   const [assistantChatChannel, setAssistantChatChannel] = useState<WorkspaceChatChannel>('ai');
+  const [newsTarget, setNewsTarget] = useState<{ projectId?: string; bitacoraId?: string; conversationId?: string }>({});
 
   const [fontsLoaded] = useFonts({
     PoppinsRegular: require('../../../assets/fonts/Poppins-Regular.ttf'),
@@ -68,7 +69,8 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
               showNews={showHomeNews}
               showRecentProjects={showHomeProjects}
               onOpenNews={(target) => {
-                setActiveTab(target === 'chat' ? 'proyectos' : 'aprendices');
+                setNewsTarget(target);
+                setActiveTab(target.action === 'chat' ? 'proyectos' : 'aprendices');
               }}
               onOpenChatChannel={(channel) => {
                 setAssistantChatChannel(channel);
@@ -77,7 +79,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
             />
           )}
           {activeTab === 'aprendices' && (
-            <InstructorProjectsTab session={session} />
+            <InstructorProjectsTab session={session} focus={newsTarget} />
           )}
           {activeTab === 'asistente' && (
             <InstructorAIAssistant
@@ -88,6 +90,7 @@ export function InstructorWorkspace({ onSignOut, session }: InstructorWorkspaceP
           )}
           {activeTab === 'proyectos' && (
             <ProjectConversations
+              preferredConversationId={newsTarget.conversationId}
               session={session}
               tone={{
                 accent: instructorPalette.primary,

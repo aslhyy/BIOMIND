@@ -80,6 +80,7 @@ type RealProject = {
 
 type RealBitacora = {
   id: string;
+  nombre?: string;
   proyectoId?: string;
   proyectoTitulo?: string;
   aprendizUid?: string;
@@ -106,7 +107,7 @@ type ConversationSummary = {
   actualizadoEn: any;
 };
 
-type InstructorNewsAction = 'chat' | 'tracking';
+type InstructorNewsTarget = { action: 'chat' | 'tracking'; projectId?: string; bitacoraId?: string; conversationId?: string };
 
 export function InstructorHomeTab({
   onOpenNews,
@@ -115,7 +116,7 @@ export function InstructorHomeTab({
   showRecentProjects = true,
   onOpenChatChannel,
 }: {
-  onOpenNews: (target: InstructorNewsAction) => void;
+  onOpenNews: (target: InstructorNewsTarget) => void;
   session: AuthenticatedSession;
   showNews?: boolean;
   showRecentProjects?: boolean;
@@ -285,10 +286,12 @@ export function InstructorHomeTab({
           id: `bitacora-${bitacora.id}`,
           accent: instructorPalette.secondary,
           action: 'tracking' as const,
+          projectId: bitacora.proyectoId,
+          bitacoraId: bitacora.id,
           icon: 'notebook-check-outline' as const,
           type: 'Bitácora subida',
-          title: learner?.nombre || bitacora.aprendizNombre || 'Aprendiz',
-          detail: project?.titulo || bitacora.proyectoTitulo || 'Proyecto asignado',
+          title: bitacora.nombre || 'Bitácora sin nombre',
+          detail: `${learner?.nombre || bitacora.aprendizNombre || 'Aprendiz'} · ${project?.titulo || bitacora.proyectoTitulo || 'Proyecto asignado'}`,
           photoUrl: learner?.photoUrl || null,
           timestamp: getMillis(bitacora.actualizadoEn) || getMillis(bitacora.creadoEn) || getDateMillis(bitacora.fecha || ''),
         };
@@ -312,6 +315,7 @@ export function InstructorHomeTab({
           id: `mensaje-${summary.id}`,
           accent: instructorPalette.primary,
           action: 'chat' as const,
+          conversationId: summary.id,
           icon: 'message-text-outline' as const,
           type: 'Mensaje nuevo',
           title: user?.nombre || summary.ultimoRemitenteNombre || 'Usuario',
@@ -415,7 +419,7 @@ export function InstructorHomeTab({
         {newsItems.length ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.newsCarouselContent}>
             {newsItems.map((item) => (
-              <InstructorNewsCard key={item.id} item={item} onPress={() => onOpenNews(item.action)} />
+              <InstructorNewsCard key={item.id} item={item} onPress={() => onOpenNews(item)} />
             ))}
           </ScrollView>
         ) : (

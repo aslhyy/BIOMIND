@@ -3,6 +3,7 @@ import {
   arrayRemove,
   arrayUnion,
   collection,
+  deleteDoc,
   deleteField,
   doc,
   getDocs,
@@ -25,6 +26,7 @@ const RESULTADOS_COLLECTION = 'resultadosAprendizaje';
 const ASIGNACIONES_COMPETENCIAS_COLLECTION = 'asignacionesCompetencias';
 const PROYECTOS_COLLECTION = 'proyectos';
 const GRUPOS_COLLECTION = 'gruposTrabajo';
+const CONVERSACIONES_COLLECTION = 'conversacionesProyecto';
 const PROJECT_FILES_BUCKET = process.env.EXPO_PUBLIC_PROJECT_FILES_BUCKET || 'biomind-project-files';
 
 function now() {
@@ -33,6 +35,19 @@ function now() {
 
 function cleanText(value) {
   return String(value || '').trim();
+}
+
+function normalizeComparable(value) {
+  return cleanText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('es')
+    .replace(/\s+/g, ' ');
+}
+
+async function findDuplicate(collectionName, currentId, predicate) {
+  const snapshot = await getDocs(collection(db, collectionName));
+  return mapSnapshot(snapshot).find((item) => item.id !== currentId && predicate(item));
 }
 
 function isPublicFileUri(uri) {
@@ -409,6 +424,12 @@ export async function guardarPrograma(programa) {
   if (!nombre || !codigo) {
     throw new Error('Completa nombre y código del programa.');
   }
+
+  const duplicate = await findDuplicate(PROGRAMAS_COLLECTION, programa.id, (item) =>
+    normalizeComparable(item.codigo) === normalizeComparable(codigo)
+    || normalizeComparable(item.nombre) === normalizeComparable(nombre)
+  );
+  if (duplicate) throw new Error('Ya existe un programa con ese código o nombre.');
 
   const payload = {
     nombre,
@@ -932,15 +953,28 @@ export async function assignPasanteToInstructor(instructorUid, pasanteUid) {
 }
 
 export async function guardarCompetencia(competencia) {
+  const programaId = cleanText(competencia.programaId);
   const codigo = cleanText(competencia.codigo).toUpperCase();
   const nombre = cleanText(competencia.nombre);
   const descripcion = cleanText(competencia.descripcion);
 
-  if (!codigo || !nombre) {
-    throw new Error('Completa código y nombre de la competencia.');
+  if (!programaId || !codigo || !nombre) {
+    throw new Error('Selecciona el programa y completa código y nombre de la competencia.');
+  }
+
+  const duplicate = await findDuplicate(COMPETENCIAS_COLLECTION, competencia.id, (item) =>
+    cleanText(item.programaId) === programaId
+    && (
+      normalizeComparable(item.codigo) === normalizeComparable(codigo)
+      || normalizeComparable(item.nombre) === normalizeComparable(nombre)
+    )
+  );
+  if (duplicate) {
+    throw new Error('Ya existe una competencia con ese código o nombre dentro del programa seleccionado.');
   }
 
   const payload = {
+    programaId,
     codigo,
     nombre,
     descripcion,
@@ -985,6 +1019,17 @@ export async function guardarResultadoAprendizaje(resultado) {
     throw new Error('Selecciona competencia y completa código y descripción del RAP.');
   }
 
+  const duplicate = await findDuplicate(RESULTADOS_COLLECTION, resultado.id, (item) =>
+    cleanText(item.competenciaId) === competenciaId
+    && (
+      normalizeComparable(item.codigo) === normalizeComparable(codigo)
+      || normalizeComparable(item.descripcion) === normalizeComparable(descripcion)
+    )
+  );
+  if (duplicate) {
+    throw new Error('Ya existe un RAP con ese código o descripción dentro de la competencia seleccionada.');
+  }
+
   const payload = {
     competenciaId,
     codigo,
@@ -1021,7 +1066,7 @@ export async function activarResultadoAprendizaje(id) {
   });
 }
 
-export async function asignarCompetenciaInstructor({ instructorUid, fichaId, competenciaId, resultadoId }) {
+export async function asignarCompetenciaInstructor({ id, instructorUid, fichaId, competenciaId, resultadoId }) {
   if (!instructorUid || !fichaId || !competenciaId || !resultadoId) {
     throw new Error('Selecciona instructor, ficha, competencia y RAP.');
   }
@@ -1050,13 +1095,23 @@ export async function asignarCompetenciaInstructor({ instructorUid, fichaId, com
       where('resultadoIds', 'array-contains', resultadoId)
     )
   );
-  const repeatedRap = [...mapSnapshot(existingSnapshot), ...mapSnapshot(legacyExistingSnapshot)].find(isActive);
+  const repeatedRap = [...mapSnapshot(existingSnapshot), ...mapSnapshot(legacyExistingSnapshot)]
+    .find((assignment) =>
+      assignment.id !== id
+      && cleanText(assignment.instructorUid) === instructorUid
+      && cleanText(assignment.fichaId) === fichaId
+      && cleanText(assignment.competenciaId) === competenciaId
+      && (
+        cleanText(assignment.resultadoId) === resultadoId
+        || (assignment.resultadoIds || []).includes(resultadoId)
+      )
+    );
 
   if (repeatedRap) {
-    throw new Error('Este RAP ya está asignado para esta ficha. Puedes asignar la misma competencia solo si eliges un RAP diferente.');
+    throw new Error('Esta asignación ya existe exactamente con el mismo instructor, ficha, competencia y RAP.');
   }
 
-  await addDoc(collection(db, ASIGNACIONES_COMPETENCIAS_COLLECTION), {
+  const payload = {
     instructorUid,
     fichaId,
     competenciaId,
@@ -1064,9 +1119,11 @@ export async function asignarCompetenciaInstructor({ instructorUid, fichaId, com
     resultadoIds: [resultadoId],
     activo: true,
     estado: 'Activa',
-    creadoEn: now(),
     actualizadoEn: now(),
-  });
+  };
+
+  if (id) await updateDoc(doc(db, ASIGNACIONES_COMPETENCIAS_COLLECTION, id), payload);
+  else await addDoc(collection(db, ASIGNACIONES_COMPETENCIAS_COLLECTION), { ...payload, creadoEn: now() });
 
   await updateDoc(doc(db, FICHAS_COLLECTION, fichaId), {
     instructorUids: arrayUnion(instructorUid),
@@ -1089,6 +1146,11 @@ export async function desactivarAsignacionCompetencia(id) {
     estado: 'Inactiva',
     actualizadoEn: now(),
   });
+}
+
+export async function eliminarAsignacionCompetencia(id) {
+  if (!id) throw new Error('Selecciona una asignación válida.');
+  await deleteDoc(doc(db, ASIGNACIONES_COMPETENCIAS_COLLECTION, id));
 }
 
 export async function guardarGrupoTrabajo(grupo) {
@@ -1121,15 +1183,21 @@ export async function guardarGrupoTrabajo(grupo) {
     actualizadoEn: now(),
   };
 
-  if (grupo.id) {
-    await updateDoc(doc(db, GRUPOS_COLLECTION, grupo.id), payload);
-    return;
-  }
+  const groupRef = grupo.id ? doc(db, GRUPOS_COLLECTION, grupo.id) : doc(collection(db, GRUPOS_COLLECTION));
+  if (grupo.id) await updateDoc(groupRef, payload);
+  else await setDoc(groupRef, { ...payload, creadoEn: now() });
 
-  await addDoc(collection(db, GRUPOS_COLLECTION), {
-    ...payload,
-    creadoEn: now(),
-  });
+  const pasantesSnapshot = await getDocs(query(collection(db, USUARIOS_COLLECTION), where('instructorUid', '==', instructorUid)));
+  const pasanteIds = mapSnapshot(pasantesSnapshot)
+    .filter((user) => ['pasante', 'Pasante'].includes(user.rol))
+    .map((user) => user.id);
+  const participantUids = [...new Set([...aprendizIds, instructorUid, ...pasanteIds])];
+  const conversations = await getDocs(query(collection(db, CONVERSACIONES_COLLECTION), where('grupoId', '==', groupRef.id)));
+  if (!conversations.empty) {
+    const batch = writeBatch(db);
+    conversations.docs.forEach((conversation) => batch.update(conversation.ref, { participanteUids, actualizadoEn: now() }));
+    await batch.commit();
+  }
 }
 
 export async function quitarIntegranteGrupo(grupoId, aprendizUid) {
@@ -1141,6 +1209,19 @@ export async function quitarIntegranteGrupo(grupoId, aprendizUid) {
     aprendizIds: arrayRemove(aprendizUid),
     actualizadoEn: now(),
   });
+}
+
+export async function eliminarGrupoTrabajo(grupoId) {
+  if (!grupoId) throw new Error('Selecciona un grupo válido.');
+  const relatedProjects = await getDocs(query(collection(db, PROYECTOS_COLLECTION), where('grupoId', '==', grupoId)));
+  const batch = writeBatch(db);
+  relatedProjects.docs.forEach((project) => batch.update(project.ref, {
+    activo: false,
+    estado: 'Inactivo',
+    actualizadoEn: now(),
+  }));
+  batch.delete(doc(db, GRUPOS_COLLECTION, grupoId));
+  await batch.commit();
 }
 
 export async function guardarProyectoAcademico(proyecto) {
@@ -1249,4 +1330,9 @@ export async function cambiarEstadoProyecto(proyectoId, estado) {
   };
 
   await updateDoc(doc(db, PROYECTOS_COLLECTION, proyectoId), payload);
+}
+
+export async function eliminarProyectoAcademico(proyectoId) {
+  if (!proyectoId) throw new Error('Selecciona un proyecto válido.');
+  await deleteDoc(doc(db, PROYECTOS_COLLECTION, proyectoId));
 }

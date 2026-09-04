@@ -13,7 +13,7 @@ type Props = {
 export function VoiceConversationButton({ disabled = false, isActive, onPress, status }: Props) {
   const busy = status === 'requesting-permission' || status === 'processing' || status === 'waiting-ai';
   const blocked = disabled || (!isActive && busy);
-  const label = isActive ? 'Finalizar conversación' : 'Iniciar conversación';
+  const label = isActive ? 'Finalizar Manos Libres' : 'Iniciar Manos Libres';
 
   return (
     <Pressable

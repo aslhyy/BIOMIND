@@ -3,6 +3,7 @@ import { useAssignedSheetLabels } from '@/features/workspace/components/RealAcad
 import { GeminiAssistantModule } from '@/features/workspace/components/GeminiAssistantModule';
 import { ProjectConversations } from '@/features/workspace/components/ProjectConversations';
 import { BitacorasReviewPanel } from '@/features/workspace/components/BitacorasReviewPanel';
+import { ImagePreviewModal } from '@/features/workspace/components/ImagePreviewModal';
 import { UserAvatar } from '@/features/workspace/components/UserAvatar';
 import { WorkspaceBottomBar, type BottomBarTab } from '@/features/workspace/components/WorkspaceBottomBar';
 import type { AuthenticatedSession, WorkspaceAssistantPrompt } from '@/features/workspace/types';
@@ -16,14 +17,15 @@ import { escucharBitacoras } from '@/services/bitacoras';
 // @ts-ignore
 import { escucharContextoAcademicoUsuario, escucharGruposTrabajo, escucharProyectos } from '@/services/academic';
 // @ts-ignore
-import { escucharTareasPasanteAsignadas, marcarTareaPasanteHecha, marcarTareaPasantePendiente } from '@/services/pasanteTasks';
+import { escucharTareasPasanteAsignadas, guardarEntregaTareaPasante, guardarObservacionPasanteTarea } from '@/services/pasanteTasks';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { StatusBar } from 'expo-status-bar';
 import type { ComponentProps } from 'react';
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   pasanteAssignedLearners,
@@ -230,6 +232,7 @@ type RealSheet = {
 
 type RealBitacora = {
   id: string;
+  nombre?: string;
   aprendizUid?: string;
   aprendizNombre?: string;
   proyectoId?: string;
@@ -253,6 +256,8 @@ type PasanteAssignedTask = {
     uri: string;
     url: string;
   }[];
+  archivosPasante?: { nombre: string; mimeType: string; uri: string; url: string }[];
+  observaciones?: { id?: string; autorNombre?: string; autorRol?: string; texto?: string; creadoEn?: any }[];
   fichaId: string;
   fichaNumero?: string;
   proyectoId: string;
@@ -267,6 +272,9 @@ type PasanteAssignedTask = {
 
 export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) {
   const insets = useSafeAreaInsets();
+  const workspaceScrollRef = useRef<ScrollView>(null);
+  const agendaY = useRef(0);
+  const [focusedTaskId, setFocusedTaskId] = useState('');
   const [activeTab, setActiveTab] = useState<PasanteTab>('inicio');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [autoSummaryEnabled, setAutoSummaryEnabled] = useState(true);
@@ -401,6 +409,8 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
     () => [
       'Eres BIOMIND IA para pasantes de biotecnologia vegetal.',
       'Ayudas a responder preguntas tecnicas, preparar respuestas para aprendices, resumir fichas, revisar proyectos, organizar tareas y generar informes con informacion real visible para el pasante.',
+      'El pasante puede redactar observaciones, pero no puede aprobar ni desaprobar bitácoras. Nunca afirmes que ejecutaste esa acción.',
+      'Cuando el usuario pida una tarea, ficha, grupo, proyecto o bitácora, identifica el registro exacto por su nombre y explica brevemente dónde abrirlo.',
       autoSummaryEnabled
         ? 'Si el pasante pide una respuesta extensa, entrega primero un resumen tecnico breve y luego acciones concretas.'
         : 'No generes resumenes automaticos largos; responde de forma puntual y solo resume si el usuario lo pide explicitamente.',
@@ -500,6 +510,7 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
         keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
         style={styles.screen}>
         <ScrollView
+          ref={workspaceScrollRef}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -519,7 +530,16 @@ export function PasanteWorkspace({ onSignOut, session }: PasanteWorkspaceProps) 
                 tasks={assignedTasks}
                 realTasks={realTasks}
                 onOpenAssistant={openAssistantForProject}
-                onOpenNews={() => setActiveTab('seguimiento')}
+                focusedTaskId={focusedTaskId}
+                onAgendaLayout={(y) => { agendaY.current = y; }}
+                onOpenNews={(item) => {
+                  if (item.id.startsWith('task-')) {
+                    setFocusedTaskId(item.id.replace('task-', ''));
+                    requestAnimationFrame(() => workspaceScrollRef.current?.scrollTo({ y: Math.max(0, agendaY.current - 24), animated: true }));
+                  } else {
+                    setActiveTab('seguimiento');
+                  }
+                }}
               />
               {realFeedback ? <Text style={styles.feedbackText}>{realFeedback}</Text> : null}
             </>
@@ -670,6 +690,8 @@ function PasanteHomeTab({
   tasks,
   onOpenAssistant,
   onOpenNews,
+  focusedTaskId,
+  onAgendaLayout,
 }: {
   metrics: PasanteMetric[];
   projects: PasanteProject[];
@@ -682,7 +704,9 @@ function PasanteHomeTab({
   session: AuthenticatedSession;
   tasks: PasanteTask[];
   onOpenAssistant: (projectId: string) => void;
-  onOpenNews: () => void;
+  onOpenNews: (item: { id: string }) => void;
+  focusedTaskId: string;
+  onAgendaLayout: (y: number) => void;
 }) {
   const [sheetModalOpen, setSheetModalOpen] = useState(false);
   const [selectedInstructorId, setSelectedInstructorId] = useState('');
@@ -728,10 +752,10 @@ function PasanteHomeTab({
       return {
         id: `bitacora-${bitacora.id}`,
         accent: bitacora.estado === 'Aprobada' ? pasantePalette.green : pasantePalette.secondary,
-        detail: `${project?.titulo || bitacora.proyectoTitulo || 'Proyecto'} - ${bitacora.aprendizNombre || 'Aprendiz'}`,
+        detail: `${project?.titulo || bitacora.proyectoTitulo || 'Proyecto'} · ${bitacora.aprendizNombre || 'Aprendiz'}`,
         icon: bitacora.observacion ? 'comment-check-outline' as const : 'notebook-check-outline' as const,
         timestamp: getMillis(bitacora.actualizadoEn) || getMillis(bitacora.creadoEn) || getDateMillis(bitacora.fecha || ''),
-        title: bitacora.observacion ? 'Bitácora observada' : 'Bitácora nueva',
+        title: bitacora.nombre || 'Bitácora sin nombre',
         type: bitacora.estado || 'Por revisar',
       };
     });
@@ -799,21 +823,22 @@ function PasanteHomeTab({
       {newsItems.length ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.newsCarouselContent}>
           {newsItems.map((item) => (
-            <PasanteNewsCard key={item.id} item={item} onPress={onOpenNews} />
+            <PasanteNewsCard key={item.id} item={item} onPress={() => onOpenNews(item)} />
           ))}
         </ScrollView>
       ) : (
         <EmptyAssignedState />
       )}
 
+      <View onLayout={(event) => onAgendaLayout(event.nativeEvent.layout.y)}>
       <SectionHeading
         actionLabel="Hoy"
         subtitle="Actividades y validaciones que acompañas en laboratorio."
         title="Agenda técnica"
       />
-      <View style={styles.stack}>
+      <View style={[styles.stack, styles.agendaTaskList]}>
         {realTasks.length ? (
-          realTasks.slice(0, 3).map((task) => (
+          [...realTasks].sort((a, b) => Number(b.id === focusedTaskId) - Number(a.id === focusedTaskId)).slice(0, 3).map((task) => (
             <DashboardPasanteTaskCard key={task.id} task={task} />
           ))
         ) : tasks.length ? (
@@ -823,6 +848,7 @@ function PasanteHomeTab({
         ) : (
           <EmptyAssignedState />
         )}
+      </View>
       </View>
 
     </>
@@ -1040,6 +1066,7 @@ function PasanteNewsCard({
   onPress,
 }: {
   item: {
+    id: string;
     accent: string;
     detail: string;
     icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
@@ -1532,6 +1559,7 @@ function AssignedPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
 }
 
 function AssignedPasanteTaskContent({ accent, task }: { accent: string; task: PasanteAssignedTask }) {
+  const observations = [...(task.observaciones || [])].sort((a, b) => getMillis(a.creadoEn) - getMillis(b.creadoEn));
   return (
     <>
       <View style={styles.cardHeader}>
@@ -1545,22 +1573,44 @@ function AssignedPasanteTaskContent({ accent, task }: { accent: string; task: Pa
         <StatusBadge accent={accent} label={task.estado || 'Pendiente'} soft={`${accent}1F`} />
       </View>
       {task.descripcion ? <Text style={styles.cardText}>{task.descripcion}</Text> : null}
-      <PasanteTaskAttachments archivos={task.archivos || []} />
-      {task.observacionInstructor ? <Text style={styles.qaLabel}>Instructor: {task.observacionInstructor}</Text> : null}
-      {task.observacionPasante ? <Text style={styles.qaLabel}>Pasante: {task.observacionPasante}</Text> : null}
+      <PasanteTaskAttachments archivos={task.archivos || []} title="Adjuntos del instructor" />
+      <PasanteTaskAttachments archivos={task.archivosPasante || []} title="Entrega del pasante" />
+      {observations.length ? observations.map((item, index) => (
+        <Text key={item.id || `${item.autorRol}-${index}`} style={styles.qaLabel}>
+          {item.autorRol || 'Usuario'}: {item.texto}
+        </Text>
+      )) : (
+        <>
+          {task.observacionInstructor ? <Text style={styles.qaLabel}>Instructor: {task.observacionInstructor}</Text> : null}
+          {task.observacionPasante ? <Text style={styles.qaLabel}>Pasante: {task.observacionPasante}</Text> : null}
+        </>
+      )}
     </>
   );
 }
 
-function PasanteTaskAttachments({ archivos }: { archivos: NonNullable<PasanteAssignedTask['archivos']> }) {
+function PasanteTaskAttachments({ archivos, title }: { archivos: NonNullable<PasanteAssignedTask['archivos']>; title?: string }) {
+  const [previewImageUri, setPreviewImageUri] = useState('');
   if (!archivos.length) {
     return null;
   }
 
   return (
     <View style={styles.taskAttachmentList}>
+      {title ? <Text style={styles.taskAttachmentTitle}>{title}</Text> : null}
       {archivos.map((file, index) => {
         const fileUrl = file.url || file.uri || '';
+        const isImage = /^image\//i.test(file.mimeType || '') || /\.(jpe?g|png|gif|webp|heic)(\?|$)/i.test(fileUrl);
+        if (isImage && fileUrl) {
+          return (
+            <Pressable key={`${fileUrl}-${index}`} onPress={() => setPreviewImageUri(fileUrl)} style={styles.taskImageButton}>
+              <Image source={{ uri: fileUrl }} style={styles.taskImagePreview} />
+              <View style={styles.taskImageOverlay}>
+                <MaterialCommunityIcons name="arrow-expand" size={17} color="#FFFFFF" />
+              </View>
+            </Pressable>
+          );
+        }
         return (
           <Pressable
             key={`${fileUrl || file.nombre}-${index}`}
@@ -1573,17 +1623,38 @@ function PasanteTaskAttachments({ archivos }: { archivos: NonNullable<PasanteAss
           </Pressable>
         );
       })}
+      <ImagePreviewModal onClose={() => setPreviewImageUri('')} uri={previewImageUri} />
     </View>
   );
 }
 
 function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
-  const [observation, setObservation] = useState(task.observacionPasante || '');
+  const [observation, setObservation] = useState('');
+  const [attachments, setAttachments] = useState<NonNullable<PasanteAssignedTask['archivosPasante']>>([]);
   const [feedback, setFeedback] = useState('');
 
-  useEffect(() => {
-    setObservation(task.observacionPasante || '');
-  }, [task.observacionPasante]);
+  const pickPhotos = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.9 });
+    if (!result.canceled) setAttachments((current) => [...current, ...result.assets.map((asset, index) => ({ nombre: asset.fileName || `foto-${Date.now()}-${index + 1}.jpg`, mimeType: asset.mimeType || 'image/jpeg', uri: asset.uri, url: asset.uri }))]);
+  };
+  const pickFiles = async () => {
+    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: true });
+    if (!result.canceled) setAttachments((current) => [...current, ...result.assets.map((asset) => ({ nombre: asset.name || 'Adjunto', mimeType: asset.mimeType || 'application/octet-stream', uri: asset.uri, url: asset.uri }))]);
+  };
+
+  const sendObservation = async () => {
+    if (!observation.trim()) return;
+    try {
+      await guardarObservacionPasanteTarea(task.id, observation);
+      setObservation('');
+      setFeedback('Observación enviada.');
+    } catch (error) {
+      const typedError = error as { message: string };
+      setFeedback(typedError.message || 'No pudimos enviar la observación.');
+    }
+  };
 
   const confirmDone = () => {
     Alert.alert(
@@ -1595,7 +1666,9 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
           text: 'Aceptar',
           onPress: async () => {
             try {
-              await marcarTareaPasanteHecha(task.id, observation);
+              await guardarEntregaTareaPasante(task.id, { observacionPasante: observation, archivos: attachments as any, estado: 'Hecho' });
+              setObservation('');
+              setAttachments([]);
               setFeedback('Tarea marcada como hecha. El instructor debe validarla.');
             } catch (error) {
               const typedError = error as { message: string };
@@ -1617,7 +1690,9 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
           text: 'Aceptar',
           onPress: async () => {
             try {
-              await marcarTareaPasantePendiente(task.id, observation);
+              await guardarEntregaTareaPasante(task.id, { observacionPasante: observation, archivos: attachments as any, estado: 'Pendiente' });
+              setObservation('');
+              setAttachments([]);
               setFeedback('Tarea marcada nuevamente como pendiente.');
             } catch (error) {
               const typedError = error as { message: string };
@@ -1637,7 +1712,35 @@ function DashboardPasanteTaskCard({ task }: { task: PasanteAssignedTask }) {
       />
       {task.estado !== 'Validada' ? (
         <>
-          <Field label="Observación del pasante" value={observation} onChangeText={setObservation} />
+          <Text style={styles.fieldLabel}>Observación del pasante</Text>
+          <View style={styles.observationComposer}>
+            <TextInput
+              multiline
+              placeholder="Escribe una observación..."
+              placeholderTextColor={pasantePalette.textMuted}
+              style={styles.observationInput}
+              value={observation}
+              onChangeText={setObservation}
+            />
+            <Pressable
+              accessibilityLabel="Enviar observación"
+              disabled={!observation.trim()}
+              onPress={sendObservation}
+              style={[styles.observationSendButton, !observation.trim() && styles.observationSendButtonDisabled]}>
+              <MaterialCommunityIcons name="arrow-up" size={20} color="#FFFFFF" />
+            </Pressable>
+          </View>
+          <View style={styles.attachmentActionRow}>
+            <Pressable onPress={pickPhotos} style={styles.attachmentIconButton}>
+              <MaterialCommunityIcons name="image-multiple-outline" size={20} color={pasantePalette.primary} />
+              <Text style={styles.attachmentIconText}>Fotos</Text>
+            </Pressable>
+            <Pressable onPress={pickFiles} style={styles.attachmentIconButton}>
+              <MaterialCommunityIcons name="file-upload-outline" size={20} color={pasantePalette.primary} />
+              <Text style={styles.attachmentIconText}>Archivos</Text>
+            </Pressable>
+          </View>
+          <PasanteTaskAttachments archivos={attachments} title="Archivos listos para entregar" />
           {task.estado === 'Hecho' ? (
             <View style={styles.badgeRow}>
               <Pressable onPress={confirmPending} style={styles.secondaryButton}>
@@ -2326,6 +2429,9 @@ const styles = StyleSheet.create({
   stack: {
     gap: 12,
   },
+  agendaTaskList: {
+    marginTop: 16,
+  },
   trackingPanel: {
     backgroundColor: pasantePalette.surface,
     elevation: 1,
@@ -2656,6 +2762,12 @@ const styles = StyleSheet.create({
   taskAttachmentList: {
     gap: 7,
   },
+  taskAttachmentTitle: {
+    color: pasantePalette.text,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 11,
+    marginTop: 4,
+  },
   taskAttachmentItem: {
     alignItems: 'center',
     backgroundColor: pasantePalette.surfaceMuted,
@@ -2672,6 +2784,80 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: 'PoppinsMedium',
     fontSize: 11,
+  },
+  taskImageButton: {
+    borderRadius: 14,
+    height: 180,
+    overflow: 'hidden',
+    position: 'relative',
+    width: '100%',
+  },
+  taskImagePreview: {
+    height: '100%',
+    width: '100%',
+  },
+  taskImageOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.48)',
+    borderRadius: 15,
+    bottom: 9,
+    height: 30,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 9,
+    width: 30,
+  },
+  observationComposer: {
+    alignItems: 'flex-end',
+    backgroundColor: pasantePalette.aquaSoft,
+    borderColor: pasantePalette.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    padding: 7,
+    paddingLeft: 14,
+  },
+  observationInput: {
+    color: pasantePalette.text,
+    flex: 1,
+    fontFamily: 'PoppinsRegular',
+    fontSize: 13,
+    maxHeight: 100,
+    minHeight: 32,
+    paddingVertical: 6,
+  },
+  observationSendButton: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.primary,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  observationSendButtonDisabled: {
+    opacity: 0.35,
+  },
+  attachmentActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  attachmentIconButton: {
+    alignItems: 'center',
+    backgroundColor: pasantePalette.surfaceMuted,
+    borderColor: pasantePalette.border,
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  attachmentIconText: {
+    color: pasantePalette.primary,
+    fontFamily: 'PoppinsSemiBold',
+    fontSize: 12,
   },
   questionCard: {
     backgroundColor: pasantePalette.surface,
